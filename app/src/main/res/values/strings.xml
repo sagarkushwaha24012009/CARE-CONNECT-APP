@@ -1,3 +1,19 @@
 <resources>
     <string name="app_name">Care Connect</string>
+    <string name="tagline_elder">Your Family. Your Care.</string>
+    <string name="tagline_caretaker">Caretaker Dashboard</string>
+    <string name="onboarding_title">Care Connect</string>
+    <string name="onboarding_subtitle">A friendly daily companion connecting elders and family caretakers.</string>
+    <string name="privacy_summary">Care Connect only shares your schedule, hydration, tasks, and optional location with caretakers you explicitly approve using a private pairing code. You can revoke access or disable location sharing at any time.</string>
+    <string name="medicine_safety_notice">Medicine names and dosages are entered from your prescription or by an authorized caretaker. Care Connect does not diagnose, prescribe, or recommend dosages.</string>
+    <string name="water_safety_notice">Daily hydration goals are personal wellness targets configured by you or your caretaker and do not replace medical advice.</string>
+    <string name="ai_wellness_disclaimer">General lifestyle wellness ideas powered by AI. Not medical advice, diagnosis, or treatment.</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sos_title">SOS Emergency</string>
+    <string name="sos_get_help">Get Help Now</string>
+    <string name="cd_app_logo">Care Connect home and heart logo</string>
+    <string name="cd_profile">Open profile and settings</string>
+    <string name="cd_notifications">Open notifications</string>
+    <string name="cd_settings">Open settings</string>
+    <string name="cd_elder_avatar">Elder profile illustration</string>
 </resources>

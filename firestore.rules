@@ -1,0 +1,505 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything not explicitly matched
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidAuthorizedUids(listVal, elderId) {
+      return listVal is list &&
+             listVal.size() >= 1 &&
+             listVal.size() <= 10 &&
+             (listVal[0] is string) &&
+             (elderId in listVal);
+    }
+
+    function isElderMember(elderId) {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/elder_profiles/$(elderId)) &&
+             request.auth.uid in get(/databases/$(database)/documents/elder_profiles/$(elderId)).data.authorizedUids;
+    }
+
+    // --- VALIDATION HELPERS ---
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.role in ['elder', 'caretaker'] &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('avatarKey' in data) || data.avatarKey in ['grandpa', 'grandma', 'caretaker']) &&
+             (!('themePreset' in data) || data.themePreset in ['classic_pastel', 'warm_cream', 'high_contrast']) &&
+             (!('darkMode' in data) || data.darkMode is bool) &&
+             (!('textScale' in data) || data.textScale in ['normal', 'large', 'extra_large']) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidElderProfile(data) {
+      return isValidId(data.elderId) &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.dailyWaterGoal is int && data.dailyWaterGoal >= 1 && data.dailyWaterGoal <= 20 &&
+             data.locationSharingEnabled is bool &&
+             data.onlineStatus in ['online', 'offline'] &&
+             data.avatarKey in ['grandpa', 'grandma'] &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             (!('lastKnownArea' in data) || (data.lastKnownArea is string && data.lastKnownArea.size() <= 120)) &&
+             (!('lastLocationAt' in data) || isValidTimestamp(data.lastLocationAt)) &&
+             (!('ageLabel' in data) || (data.ageLabel is string && data.ageLabel.size() <= 20)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPairingInvite(data) {
+      return data.code is string && data.code.matches('^[A-Z0-9]{6}$') &&
+             isValidId(data.elderId) &&
+             data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 60 &&
+             data.status in ['active', 'claimed', 'revoked'] &&
+             (!('claimedByUid' in data) || (data.claimedByUid is string && data.claimedByUid.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCaretakerLink(data) {
+      return isValidId(data.elderId) &&
+             data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 60 &&
+             isValidId(data.caretakerId) &&
+             data.caretakerName is string && data.caretakerName.size() >= 1 && data.caretakerName.size() <= 60 &&
+             data.inviteCode is string && data.inviteCode.matches('^[A-Z0-9]{6}$') &&
+             data.status in ['active', 'revoked'] &&
+             data.authorizedUids is list && data.authorizedUids.size() == 2 &&
+             (data.elderId in data.authorizedUids) && (data.caretakerId in data.authorizedUids) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMedicine(data) {
+      return isValidId(data.elderId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 60 &&
+             data.timeMinutes is int && data.timeMinutes >= 0 && data.timeMinutes <= 1439 &&
+             data.timeLabel is string && data.timeLabel.size() >= 1 && data.timeLabel.size() <= 20 &&
+             data.repeatSchedule is string && data.repeatSchedule.size() >= 1 && data.repeatSchedule.size() <= 40 &&
+             data.activeStatus in ['active', 'paused'] &&
+             (!('prescriptionNote' in data) || (data.prescriptionNote is string && data.prescriptionNote.size() <= 160)) &&
+             isValidId(data.createdByUid) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMedicineLog(data) {
+      return isValidId(data.medicineId) &&
+             isValidId(data.elderId) &&
+             data.medicineName is string && data.medicineName.size() >= 1 && data.medicineName.size() <= 80 &&
+             data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 60 &&
+             data.dateKey is string && data.dateKey.size() >= 8 && data.dateKey.size() <= 12 &&
+             data.status in ['pending', 'taken', 'skipped'] &&
+             isValidId(data.loggedByUid) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidWaterLog(data) {
+      return isValidId(data.elderId) &&
+             data.dateKey is string && data.dateKey.size() >= 8 && data.dateKey.size() <= 12 &&
+             data.glasses is int && data.glasses >= 0 && data.glasses <= 30 &&
+             data.goal is int && data.goal >= 1 && data.goal <= 20 &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTaskItem(data) {
+      return isValidId(data.elderId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.dueDateText is string && data.dueDateText.size() >= 1 && data.dueDateText.size() <= 30 &&
+             data.dueTimeText is string && data.dueTimeText.size() >= 1 && data.dueTimeText.size() <= 20 &&
+             data.completionStatus in ['pending', 'completed'] &&
+             isValidId(data.assignedByUid) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidEmergencyContact(data) {
+      return isValidId(data.elderId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 3 && data.phoneNumber.size() <= 25 &&
+             data.relationship is string && data.relationship.size() >= 1 && data.relationship.size() <= 40 &&
+             data.priorityOrder is int && data.priorityOrder >= 1 && data.priorityOrder <= 20 &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAppointment(data) {
+      return isValidId(data.elderId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.location is string && data.location.size() >= 1 && data.location.size() <= 120 &&
+             data.dateTimeText is string && data.dateTimeText.size() >= 1 && data.dateTimeText.size() <= 50 &&
+             data.reminderFlag in ['enabled', 'disabled'] &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 200)) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidNotificationItem(data) {
+      return isValidId(data.elderId) &&
+             data.category in ['medicine', 'task', 'appointment', 'sos', 'system'] &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 240 &&
+             data.readStatus in ['unread', 'read'] &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSosEvent(data) {
+      return isValidId(data.elderId) &&
+             data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 60 &&
+             data.status in ['active', 'acknowledged', 'cancelled'] &&
+             data.areaLabel is string && data.areaLabel.size() >= 1 && data.areaLabel.size() <= 120 &&
+             (!('latitude' in data) || (data.latitude is number && data.latitude >= -90.0 && data.latitude <= 90.0)) &&
+             (!('longitude' in data) || (data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0)) &&
+             data.deliveryState in ['delivered', 'acknowledged', 'cancelled'] &&
+             (!('acknowledgedByUid' in data) || (data.acknowledgedByUid is string && data.acknowledgedByUid.size() <= 128)) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    // --- COLLECTIONS ---
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'role', 'email', 'avatarKey', 'themePreset', 'darkMode', 'textScale', 'createdAt', 'updatedAt']) &&
+                       isValidUser(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUser(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'email', 'avatarKey', 'themePreset', 'darkMode', 'textScale', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    match /elder_profiles/{elderId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(elderId) &&
+                       incoming().elderId == elderId &&
+                       (request.auth.uid == elderId || request.auth.uid in incoming().authorizedUids) &&
+                       incoming().keys().hasAll(['elderId', 'displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidElderProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(elderId) &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidElderProfile(incoming()) && (
+                         // Authorized member updating profile/location/goal/links
+                         (request.auth.uid in existing().authorizedUids &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'authorizedUids', 'updatedAt'])) ||
+                         // Caretaker linking via verified caretaker_links batch creation
+                         (!(request.auth.uid in existing().authorizedUids) &&
+                          request.auth.uid in incoming().authorizedUids &&
+                          incoming().authorizedUids.hasAll(existing().authorizedUids) &&
+                          incoming().authorizedUids.size() == existing().authorizedUids.size() + 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['authorizedUids', 'updatedAt']) &&
+                          existsAfter(/databases/$(database)/documents/caretaker_links/$(elderId + '_' + request.auth.uid)))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(elderId) && (request.auth.uid == elderId || request.auth.uid in existing().authorizedUids);
+    }
+
+    match /pairing_invites/{code} {
+      allow get: if isSignedIn() && code.matches('^[A-Z0-9]{6}$');
+      allow list: if isSignedIn() && resource.data.elderId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       code.matches('^[A-Z0-9]{6}$') &&
+                       incoming().code == code &&
+                       incoming().elderId == request.auth.uid &&
+                       incoming().status == 'active' &&
+                       incoming().keys().hasAll(['code', 'elderId', 'elderName', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['code', 'elderId', 'elderName', 'status', 'claimedByUid', 'createdAt', 'updatedAt']) &&
+                       isValidPairingInvite(incoming());
+
+      allow update: if isSignedIn() &&
+                       code.matches('^[A-Z0-9]{6}$') &&
+                       incoming().code == existing().code &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidPairingInvite(incoming()) && (
+                         // Elder revokes invite
+                         (request.auth.uid == existing().elderId &&
+                          incoming().status == 'revoked' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                         // Caretaker claims active invite
+                         (existing().status == 'active' &&
+                          incoming().status == 'claimed' &&
+                          incoming().claimedByUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'claimedByUid', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && request.auth.uid == existing().elderId;
+    }
+
+    match /caretaker_links/{linkId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(linkId) &&
+                       linkId == (incoming().elderId + '_' + incoming().caretakerId) &&
+                       incoming().caretakerId == request.auth.uid &&
+                       incoming().status == 'active' &&
+                       incoming().keys().hasAll(['elderId', 'elderName', 'caretakerId', 'caretakerName', 'inviteCode', 'status', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'elderName', 'caretakerId', 'caretakerName', 'inviteCode', 'status', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidCaretakerLink(incoming()) &&
+                       get(/databases/$(database)/documents/pairing_invites/$(incoming().inviteCode)).data.elderId == incoming().elderId &&
+                       get(/databases/$(database)/documents/pairing_invites/$(incoming().inviteCode)).data.status == 'active';
+
+      allow update: if isSignedIn() &&
+                       isValidId(linkId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().caretakerId == existing().caretakerId &&
+                       incoming().inviteCode == existing().inviteCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidCaretakerLink(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(linkId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /medicines/{medicineId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(medicineId) &&
+                       incoming().createdByUid == request.auth.uid &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'name', 'dosage', 'timeMinutes', 'timeLabel', 'repeatSchedule', 'activeStatus', 'createdByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'name', 'dosage', 'timeMinutes', 'timeLabel', 'repeatSchedule', 'activeStatus', 'prescriptionNote', 'createdByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidMedicine(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(medicineId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidMedicine(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'dosage', 'timeMinutes', 'timeLabel', 'repeatSchedule', 'activeStatus', 'prescriptionNote', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(medicineId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /medicine_logs/{logId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(logId) &&
+                       incoming().loggedByUid == request.auth.uid &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['medicineId', 'elderId', 'medicineName', 'dosage', 'dateKey', 'status', 'loggedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['medicineId', 'elderId', 'medicineName', 'dosage', 'dateKey', 'status', 'loggedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidMedicineLog(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(logId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().medicineId == existing().medicineId &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().dateKey == existing().dateKey &&
+                       incoming().loggedByUid == request.auth.uid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidMedicineLog(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'loggedByUid', 'medicineName', 'dosage', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(logId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /water_logs/{logId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(logId) &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'dateKey', 'glasses', 'goal', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'dateKey', 'glasses', 'goal', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidWaterLog(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(logId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().dateKey == existing().dateKey &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidWaterLog(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['glasses', 'goal', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(logId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /tasks/{taskId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(taskId) &&
+                       incoming().assignedByUid == request.auth.uid &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'title', 'dueDateText', 'dueTimeText', 'completionStatus', 'assignedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'title', 'dueDateText', 'dueTimeText', 'completionStatus', 'assignedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidTaskItem(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(taskId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().assignedByUid == existing().assignedByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTaskItem(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'dueDateText', 'dueTimeText', 'completionStatus', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(taskId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /emergency_contacts/{contactId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(contactId) &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'name', 'phoneNumber', 'relationship', 'priorityOrder', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'name', 'phoneNumber', 'relationship', 'priorityOrder', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidEmergencyContact(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(contactId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidEmergencyContact(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phoneNumber', 'relationship', 'priorityOrder', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(contactId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /appointments/{appointmentId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(appointmentId) &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'title', 'location', 'dateTimeText', 'reminderFlag', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'title', 'location', 'dateTimeText', 'reminderFlag', 'notes', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidAppointment(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(appointmentId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidAppointment(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'location', 'dateTimeText', 'reminderFlag', 'notes', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(appointmentId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /notifications/{notificationId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().keys().hasAll(['elderId', 'category', 'title', 'body', 'readStatus', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'category', 'title', 'body', 'readStatus', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidNotificationItem(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidNotificationItem(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['readStatus', 'authorizedUids', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(notificationId) && request.auth.uid in existing().authorizedUids;
+    }
+
+    match /sos_events/{eventId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(eventId) &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().status == 'active' &&
+                       incoming().deliveryState == 'delivered' &&
+                       incoming().keys().hasAll(['elderId', 'elderName', 'status', 'areaLabel', 'deliveryState', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'elderName', 'status', 'areaLabel', 'latitude', 'longitude', 'deliveryState', 'acknowledgedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidSosEvent(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(eventId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       existing().status != 'cancelled' &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidSosEvent(incoming()) && (
+                         (incoming().status == 'acknowledged' &&
+                          incoming().deliveryState == 'acknowledged' &&
+                          incoming().acknowledgedByUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'deliveryState', 'acknowledgedByUid', 'updatedAt'])) ||
+                         (incoming().status == 'cancelled' &&
+                          incoming().deliveryState == 'cancelled' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'deliveryState', 'updatedAt']))
+                       );
+
+      allow delete: if false;
+    }
+  }
+}
