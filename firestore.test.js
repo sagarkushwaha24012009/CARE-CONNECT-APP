@@ -104,11 +104,16 @@ test("User profile isolation and strict schema validation", async () => {
   );
 });
 
-test("Consent-based pairing code flow links caretaker to elder profile atomically", async () => {
+function futureDate(msOffset = 3600000) {
+  return new Date(Date.now() + msOffset);
+}
+
+test("Consent-based daily pairing code flow links caretaker to elder profile atomically", async () => {
   const elderDb = testEnv.authenticatedContext(ELDER_UID).firestore();
   const caretakerDb = testEnv.authenticatedContext(CARETAKER_UID).firestore();
   const strangerDb = testEnv.authenticatedContext(STRANGER_UID).firestore();
   const created = pastDate(10000);
+  const expiresTomorrow = futureDate(86400000);
 
   // 1. Elder creates own elder_profile
   await assertSucceeds(
@@ -128,7 +133,22 @@ test("Consent-based pairing code flow links caretaker to elder profile atomicall
   // 2. Caretaker cannot read elder_profile before linking
   await assertFails(caretakerDb.collection("elder_profiles").doc(ELDER_UID).get());
 
-  // 3. Elder creates 6-char pairing invite
+  // 3. Elder creates 6-char daily pairing invite (and can delete old invites)
+  const oldCode = "OLD111";
+  await assertSucceeds(
+    elderDb.collection("pairing_invites").doc(oldCode).set({
+      code: oldCode,
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      dayKey: "2026-11-23",
+      expiresAt: expiresTomorrow,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+  await assertSucceeds(elderDb.collection("pairing_invites").doc(oldCode).delete());
+
   const code = "CARE88";
   await assertSucceeds(
     elderDb.collection("pairing_invites").doc(code).set({
@@ -136,12 +156,14 @@ test("Consent-based pairing code flow links caretaker to elder profile atomicall
       elderId: ELDER_UID,
       elderName: "Grandpa Arthur",
       status: "active",
+      dayKey: "2026-11-24",
+      expiresAt: expiresTomorrow,
       createdAt: created,
       updatedAt: created,
     })
   );
 
-  // 4. Caretaker claims invite, creates caretaker_link, and updates authorizedUids in a batch
+  // 4. Caretaker claims invite WITHOUT pre-reading elder_profiles, creates caretaker_link, and updates authorizedUids
   const now = pastDate(1000);
   const batch = caretakerDb.batch();
   batch.set(
@@ -177,7 +199,79 @@ test("Consent-based pairing code flow links caretaker to elder profile atomicall
       .get()
   );
 
-  // 6. Unfiltered list query and stranger access remain denied
+  // 6. Elder deletes claimed invite once claimed
+  await assertSucceeds(elderDb.collection("pairing_invites").doc(code).delete());
+
+  // 7. Expired pairing invites cannot be claimed
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("pairing_invites").doc("EXP999").set({
+      code: "EXP999",
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      dayKey: "2026-11-23",
+      expiresAt: pastDate(60000),
+      createdAt: created,
+      updatedAt: created,
+    });
+  });
+  await assertFails(
+    strangerDb.collection("pairing_invites").doc("EXP999").update({
+      status: "claimed",
+      claimedByUid: STRANGER_UID,
+      updatedAt: pastDate(500),
+    })
+  );
+
+  // 8. Elder revokes caretaker, then caretaker re-links with a fresh daily code
+  const revokeBatch = elderDb.batch();
+  revokeBatch.update(
+    elderDb.collection("caretaker_links").doc(`${ELDER_UID}_${CARETAKER_UID}`),
+    { status: "revoked", updatedAt: pastDate(400) }
+  );
+  revokeBatch.update(
+    elderDb.collection("elder_profiles").doc(ELDER_UID),
+    { authorizedUids: [ELDER_UID], updatedAt: pastDate(400) }
+  );
+  await assertSucceeds(revokeBatch.commit());
+
+  const newCode = "DAY277";
+  await assertSucceeds(
+    elderDb.collection("pairing_invites").doc(newCode).set({
+      code: newCode,
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      dayKey: "2026-11-25",
+      expiresAt: expiresTomorrow,
+      createdAt: pastDate(300),
+      updatedAt: pastDate(300),
+    })
+  );
+  const relinkBatch = caretakerDb.batch();
+  relinkBatch.update(
+    caretakerDb.collection("caretaker_links").doc(`${ELDER_UID}_${CARETAKER_UID}`),
+    {
+      elderName: "Grandpa Arthur",
+      caretakerName: "Sarah",
+      inviteCode: newCode,
+      status: "active",
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      updatedAt: pastDate(200),
+    }
+  );
+  relinkBatch.update(caretakerDb.collection("pairing_invites").doc(newCode), {
+    status: "claimed",
+    claimedByUid: CARETAKER_UID,
+    updatedAt: pastDate(200),
+  });
+  relinkBatch.update(caretakerDb.collection("elder_profiles").doc(ELDER_UID), {
+    authorizedUids: [ELDER_UID, CARETAKER_UID],
+    updatedAt: pastDate(200),
+  });
+  await assertSucceeds(relinkBatch.commit());
+
+  // 9. Unfiltered list query and stranger access remain denied
   await assertFails(caretakerDb.collection("elder_profiles").get());
   await assertFails(
     strangerDb
@@ -459,4 +553,176 @@ test("Video calls and fall-detection SOS workflows enforce member authorization"
     })
   );
 });
+
+test("Pre-creation owner get, strict link enforcement, SOS UID sync, and post-revocation isolation", async () => {
+  const elderDb = testEnv.authenticatedContext(ELDER_UID).firestore();
+  const caretakerDb = testEnv.authenticatedContext(CARETAKER_UID).firestore();
+  const strangerDb = testEnv.authenticatedContext(STRANGER_UID).firestore();
+  const created = pastDate(10000);
+  const expiresTomorrow = futureDate(86400000);
+
+  // 1. Elder can check existence of own elder_profile before it exists; caretaker and stranger are denied
+  await assertSucceeds(elderDb.collection("elder_profiles").doc(ELDER_UID).get());
+  await assertFails(caretakerDb.collection("elder_profiles").doc(ELDER_UID).get());
+  await assertFails(strangerDb.collection("elder_profiles").doc(ELDER_UID).get());
+
+  // 2. Elder creates own elder_profile
+  await assertSucceeds(
+    elderDb.collection("elder_profiles").doc(ELDER_UID).set({
+      elderId: ELDER_UID,
+      displayName: "Grandpa Arthur",
+      dailyWaterGoal: 8,
+      locationSharingEnabled: false,
+      onlineStatus: "online",
+      avatarKey: "grandpa",
+      authorizedUids: [ELDER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // 3. Caretaker CANNOT add themselves to elder_profile.authorizedUids without an active caretaker_link in the same batch
+  await assertFails(
+    caretakerDb.collection("elder_profiles").doc(ELDER_UID).update({
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      updatedAt: pastDate(500),
+    })
+  );
+
+  // 4. Even if a revoked caretaker_link exists, caretaker CANNOT add themselves without reactivating caretaker_link via a valid invite
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("caretaker_links").doc(`${ELDER_UID}_${CARETAKER_UID}`).set({
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      caretakerId: CARETAKER_UID,
+      caretakerName: "Sarah",
+      inviteCode: "OLD001",
+      status: "revoked",
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      createdAt: created,
+      updatedAt: created,
+    });
+  });
+  await assertFails(
+    caretakerDb.collection("elder_profiles").doc(ELDER_UID).update({
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      updatedAt: pastDate(400),
+    })
+  );
+
+  // 5. Link caretaker cleanly with an active pairing invite
+  const code = "LNK246";
+  await assertSucceeds(
+    elderDb.collection("pairing_invites").doc(code).set({
+      code,
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      dayKey: "2026-11-24",
+      expiresAt: expiresTomorrow,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+  const relinkBatch = caretakerDb.batch();
+  relinkBatch.update(
+    caretakerDb.collection("caretaker_links").doc(`${ELDER_UID}_${CARETAKER_UID}`),
+    {
+      elderName: "Grandpa Arthur",
+      caretakerName: "Sarah",
+      inviteCode: code,
+      status: "active",
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      updatedAt: pastDate(300),
+    }
+  );
+  relinkBatch.update(caretakerDb.collection("pairing_invites").doc(code), {
+    status: "claimed",
+    claimedByUid: CARETAKER_UID,
+    updatedAt: pastDate(300),
+  });
+  relinkBatch.update(caretakerDb.collection("elder_profiles").doc(ELDER_UID), {
+    authorizedUids: [ELDER_UID, CARETAKER_UID],
+    updatedAt: pastDate(300),
+  });
+  await assertSucceeds(relinkBatch.commit());
+
+  // 6. Seed shared records across collections and verify authorized pair read/write vs stranger denial
+  await assertSucceeds(
+    elderDb.collection("notifications").doc("notif_01").set({
+      elderId: ELDER_UID,
+      category: "sos",
+      title: "SOS Alert",
+      body: "Elder pressed SOS",
+      readStatus: "unread",
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+  await assertSucceeds(
+    elderDb.collection("sos_events").doc("sos_sync_01").set({
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      areaLabel: "Near Oak Street",
+      deliveryState: "delivered",
+      authorizedUids: [ELDER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Elder propagates newly linked caretaker UID to existing sos_events without altering status/deliveryState
+  await assertSucceeds(
+    elderDb.collection("sos_events").doc("sos_sync_01").update({
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      updatedAt: pastDate(200),
+    })
+  );
+  await assertSucceeds(
+    caretakerDb.collection("sos_events").where("authorizedUids", "array-contains", CARETAKER_UID).get()
+  );
+  await assertSucceeds(
+    caretakerDb.collection("notifications").doc("notif_01").update({
+      readStatus: "read",
+      updatedAt: pastDate(200),
+    })
+  );
+
+  // Stranger is denied on notifications and sos_events
+  await assertFails(strangerDb.collection("notifications").doc("notif_01").get());
+  await assertFails(strangerDb.collection("sos_events").doc("sos_sync_01").get());
+  await assertFails(
+    strangerDb.collection("sos_events").doc("sos_sync_01").update({
+      authorizedUids: [ELDER_UID, STRANGER_UID],
+      updatedAt: pastDate(150),
+    })
+  );
+
+  // 7. After elder revokes caretaker and propagates [ELDER_UID], caretaker loses access to elder_profile and shared docs
+  const revokeBatch = elderDb.batch();
+  revokeBatch.update(
+    elderDb.collection("caretaker_links").doc(`${ELDER_UID}_${CARETAKER_UID}`),
+    { status: "revoked", updatedAt: pastDate(100) }
+  );
+  revokeBatch.update(
+    elderDb.collection("elder_profiles").doc(ELDER_UID),
+    { authorizedUids: [ELDER_UID], updatedAt: pastDate(100) }
+  );
+  revokeBatch.update(
+    elderDb.collection("notifications").doc("notif_01"),
+    { authorizedUids: [ELDER_UID], updatedAt: pastDate(100) }
+  );
+  revokeBatch.update(
+    elderDb.collection("sos_events").doc("sos_sync_01"),
+    { authorizedUids: [ELDER_UID], updatedAt: pastDate(100) }
+  );
+  await assertSucceeds(revokeBatch.commit());
+
+  await assertFails(caretakerDb.collection("elder_profiles").doc(ELDER_UID).get());
+  await assertFails(caretakerDb.collection("notifications").doc("notif_01").get());
+  await assertFails(caretakerDb.collection("sos_events").doc("sos_sync_01").get());
+});
+
 

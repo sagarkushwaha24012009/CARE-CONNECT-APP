@@ -66,10 +66,23 @@ data class PairingInvite(
     val elderId: String = "",
     val elderName: String = "",
     val status: String = "active",
+    val dayKey: String = "",
+    val expiresAt: Timestamp? = null,
     val claimedByUid: String? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    fun hasExpiredAt(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val expMillis = expiresAt?.toDate()?.time ?: return true
+        return expMillis <= nowMillis
+    }
+
+    fun usableToday(todayKey: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        if (status != "active") return false
+        if (dayKey != todayKey) return false
+        return !hasExpiredAt(nowMillis)
+    }
+}
 
 @Keep
 @IgnoreExtraProperties

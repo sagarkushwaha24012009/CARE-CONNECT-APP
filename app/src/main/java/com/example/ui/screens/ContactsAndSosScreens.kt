@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -375,7 +376,8 @@ fun SosScreen(
     onCancelSos: (String) -> Unit,
     onToggleLocationSharing: (ElderProfile, Boolean) -> Unit,
     onRefreshLocation: (ElderProfile) -> Unit,
-    onOpenFallDetection: () -> Unit = {}
+    onOpenFallDetection: () -> Unit = {},
+    onSendSms: (ElderProfile, SosEvent?) -> Unit = { _, _ -> }
 ) {
     BackHandler(onBack = onBack)
     val tokens = LocalCareColors.current
@@ -505,6 +507,18 @@ fun SosScreen(
                                 testTag = "sos_cancel_button"
                             )
                         }
+                        Spacer(Modifier.height(10.dp))
+                        CareButton(
+                            text = if (contacts.isNotEmpty()) {
+                                "Send Emergency SMS (${contacts.size} Contact${if (contacts.size == 1) "" else "s"})"
+                            } else {
+                                "Prepare Emergency SMS"
+                            },
+                            icon = Icons.Filled.Sms,
+                            backgroundColor = tokens.butterYellow,
+                            onClick = { onSendSms(elder, activeSos) },
+                            testTag = "sos_send_sms_button"
+                        )
                     }
                 }
 
@@ -517,7 +531,7 @@ fun SosScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "Pressing Send SOS Alert notifies linked caretakers with your current status and permitted area. You will be asked to confirm first.",
+                        text = "Pressing Send SOS Alert notifies linked caretakers in the cloud with your current status and permitted area, and prepares an emergency SMS to your ${contacts.size} saved contact(s).",
                         style = MaterialTheme.typography.bodyLarge,
                         color = tokens.secondaryInk
                     )

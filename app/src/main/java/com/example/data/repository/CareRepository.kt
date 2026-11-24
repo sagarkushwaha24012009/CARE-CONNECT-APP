@@ -24,6 +24,8 @@ import com.example.model.UserRole
 import com.example.model.VideoCallSession
 import com.example.model.WaterLog
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -43,6 +45,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -57,16 +60,32 @@ class CareRepository(
     private val careDao: CareDao,
     private val auth: FirebaseAuth = Firebase.auth
 ) {
-    constructor(context: Context) : this(
+    constructor(context: Context, firebaseAuth: FirebaseAuth = FirebaseAuth.getInstance(resolveFirebaseApp(context))) : this(
         db = FirebaseFirestore.getInstance(
+            resolveFirebaseApp(context),
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
-        careDao = CareDatabase.getInstance(context.applicationContext).careDao()
+        careDao = CareDatabase.getInstance(context.applicationContext).careDao(),
+        auth = firebaseAuth
     )
 
     private fun requireUserId(): String =
         auth.currentUser?.uid
             ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+
+    private suspend fun ensureFreshAuthUid(allowOfflineFallback: Boolean = true): String {
+        val user = auth.currentUser
+            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+        try {
+            user.getIdToken(false).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!allowOfflineFallback) throw e
+            Log.w("CareRepo", "Using cached auth UID while offline/refreshing token", e)
+        }
+        return user.uid
+    }
 
     fun todayDateKey(): String =
         SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -231,7 +250,9 @@ class CareRepository(
         textScale: String = "normal"
     ): Result<UserProfile> {
         val uid = try {
-            requireUserId()
+            ensureFreshAuthUid(allowOfflineFallback = false)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return Result.failure(e)
         }
@@ -417,54 +438,132 @@ class CareRepository(
         )
     }
 
+    private fun endOfTodayTimestamp(): Timestamp {
+        val cal = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val minFutureMillis = System.currentTimeMillis() + 300_000L
+        val targetMillis = maxOf(cal.timeInMillis, minFutureMillis)
+        return Timestamp(Date(targetMillis))
+    }
+
     suspend fun generatePairingInvite(elderName: String): Result<String> {
         val uid = try {
-            requireUserId()
+            ensureFreshAuthUid(allowOfflineFallback = false)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return Result.failure(e)
         }
+        val safeElderName = elderName.trim().ifEmpty { "Family Elder" }.take(60)
+        val todayKey = todayDateKey()
+        val expiresAt = endOfTodayTimestamp()
         val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        val code = (1..6).map { chars.random() }.joinToString("")
-        val payload = mapOf(
-            "code" to code,
-            "elderId" to uid,
-            "elderName" to elderName.trim().ifEmpty { "Family Elder" }.take(60),
-            "status" to "active",
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
         return try {
-            db.collection("pairing_invites").document(code).set(payload).await()
+            // Ensure own elder_profile exists so caretaker batch linking never fails NOT_FOUND
+            val ownElderRef = db.collection("elder_profiles").document(uid)
+            val ownElderSnap = ownElderRef.get().await()
+            if (!ownElderSnap.exists()) {
+                ownElderRef.set(
+                    mapOf(
+                        "elderId" to uid,
+                        "displayName" to safeElderName,
+                        "dailyWaterGoal" to 8,
+                        "locationSharingEnabled" to false,
+                        "onlineStatus" to "online",
+                        "avatarKey" to "grandpa",
+                        "authorizedUids" to listOf(uid),
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+
+            // Delete ALL prior invites (old, claimed, revoked, or previous active) so stale codes cannot pile up
+            val existingSnap = db.collection("pairing_invites")
+                .whereEqualTo("elderId", uid)
+                .get()
+                .await()
+            val existingIds = existingSnap.documents.map { it.id }.toSet()
+            var code: String
+            do {
+                code = (1..6).map { chars.random() }.joinToString("")
+            } while (code in existingIds)
+
+            val batch = db.batch()
+            existingSnap.documents.forEach { oldDoc ->
+                batch.delete(oldDoc.reference)
+            }
+            val payload = mapOf(
+                "code" to code,
+                "elderId" to uid,
+                "elderName" to safeElderName,
+                "status" to "active",
+                "dayKey" to todayKey,
+                "expiresAt" to expiresAt,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            batch.set(db.collection("pairing_invites").document(code), payload)
+            batch.commit().await()
             Result.success(code)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, "pairing_invites/$code")
+            handleFirestoreError(e, OperationType.CREATE, "pairing_invites")
             Result.failure(e)
+        }
+    }
+
+    suspend fun cleanupStalePairingInvites(elderUid: String) {
+        val current = auth.currentUser?.uid ?: return
+        if (elderUid.isBlank() || current != elderUid) return
+        val todayKey = todayDateKey()
+        val nowMillis = System.currentTimeMillis()
+        try {
+            val snap = db.collection("pairing_invites")
+                .whereEqualTo("elderId", elderUid)
+                .get()
+                .await()
+            val staleRefs = snap.documents.filter { doc ->
+                val invite = doc.toObject(PairingInvite::class.java) ?: return@filter true
+                !invite.usableToday(todayKey, nowMillis)
+            }.map { it.reference }
+
+            if (staleRefs.isNotEmpty()) {
+                val batch = db.batch()
+                staleRefs.forEach { batch.delete(it) }
+                batch.commit().await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("CareRepo", "Failed cleaning up stale pairing invites", e)
         }
     }
 
     suspend fun revokePairingInvite(code: String): Result<Unit> {
         return try {
             requireUserId()
-            db.collection("pairing_invites").document(code).update(
-                mapOf(
-                    "status" to "revoked",
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            db.collection("pairing_invites").document(code).delete().await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, "pairing_invites/$code")
+            handleFirestoreError(e, OperationType.DELETE, "pairing_invites/$code")
             Result.failure(e)
         }
     }
 
     suspend fun claimPairingInvite(rawCode: String, caretakerName: String): Result<String> {
         val uid = try {
-            requireUserId()
+            ensureFreshAuthUid(allowOfflineFallback = false)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return Result.failure(e)
         }
@@ -475,57 +574,105 @@ class CareRepository(
         return try {
             val inviteSnap = db.collection("pairing_invites").document(code).get().await()
             if (!inviteSnap.exists()) {
-                return Result.failure(IllegalStateException("Pairing code not found."))
+                return Result.failure(IllegalStateException("Pairing code not found or already deleted. Ask the elder for today's code."))
             }
             val invite = inviteSnap.toObject(PairingInvite::class.java)
                 ?: return Result.failure(IllegalStateException("Invalid pairing code record."))
             if (invite.status != "active") {
-                return Result.failure(IllegalStateException("This pairing code has already been ${invite.status}."))
+                return Result.failure(IllegalStateException("This pairing code has already been ${invite.status}. Ask the elder to generate a new code."))
+            }
+            if (invite.hasExpiredAt()) {
+                return Result.failure(IllegalStateException("This pairing code expired. Ask ${invite.elderName.ifBlank { "the elder" }} to generate today's new code."))
             }
             if (invite.elderId == uid) {
                 return Result.failure(IllegalStateException("You cannot link to your own elder profile as a caretaker."))
             }
 
-            val elderRef = db.collection("elder_profiles").document(invite.elderId)
-            val elderSnap = elderRef.get().await()
-            val existingAuthorized = (elderSnap.get("authorizedUids") as? List<*>)
-                ?.filterIsInstance<String>()
-                ?: listOf(invite.elderId)
-            val updatedAuthorized = (existingAuthorized + uid).distinct().take(10)
+            val safeElderName = invite.elderName.trim().ifEmpty { "Family Elder" }.take(60)
+            val safeCaretakerName = caretakerName.trim().ifEmpty { "Caretaker" }.take(60)
 
+            // Check caretaker's existing authorized links and linked elder profiles via allowed list queries
+            val existingLinksSnap = db.collection("caretaker_links")
+                .whereArrayContains("authorizedUids", uid)
+                .get()
+                .await()
             val linkId = "${invite.elderId}_$uid"
+            val existingLink = existingLinksSnap.documents
+                .firstOrNull { it.id == linkId }
+                ?.toObject(CaretakerLink::class.java)
+
+            val linkedEldersSnap = db.collection("elder_profiles")
+                .whereArrayContains("authorizedUids", uid)
+                .get()
+                .await()
+            val alreadyInElderProfile = linkedEldersSnap.documents.any { it.id == invite.elderId }
+
+            if (existingLink?.status == "active" && alreadyInElderProfile) {
+                db.collection("pairing_invites").document(code).update(
+                    mapOf(
+                        "status" to "claimed",
+                        "claimedByUid" to uid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                return Result.success(safeElderName)
+            }
+
+            val elderRef = db.collection("elder_profiles").document(invite.elderId)
+            val linkRef = db.collection("caretaker_links").document(linkId)
+            val inviteRef = db.collection("pairing_invites").document(code)
+
             val batch = db.batch()
-            batch.set(
-                db.collection("caretaker_links").document(linkId),
-                mapOf(
-                    "elderId" to invite.elderId,
-                    "elderName" to invite.elderName,
-                    "caretakerId" to uid,
-                    "caretakerName" to caretakerName.trim().ifEmpty { "Caretaker" }.take(60),
-                    "inviteCode" to code,
-                    "status" to "active",
-                    "authorizedUids" to listOf(invite.elderId, uid),
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
+            when {
+                existingLink == null -> {
+                    batch.set(
+                        linkRef,
+                        mapOf(
+                            "elderId" to invite.elderId,
+                            "elderName" to safeElderName,
+                            "caretakerId" to uid,
+                            "caretakerName" to safeCaretakerName,
+                            "inviteCode" to code,
+                            "status" to "active",
+                            "authorizedUids" to listOf(invite.elderId, uid),
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                existingLink.status != "active" -> {
+                    batch.update(
+                        linkRef,
+                        mapOf(
+                            "elderName" to safeElderName,
+                            "caretakerName" to safeCaretakerName,
+                            "inviteCode" to code,
+                            "status" to "active",
+                            "authorizedUids" to listOf(invite.elderId, uid),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+            }
             batch.update(
-                db.collection("pairing_invites").document(code),
+                inviteRef,
                 mapOf(
                     "status" to "claimed",
                     "claimedByUid" to uid,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
-            batch.update(
-                elderRef,
-                mapOf(
-                    "authorizedUids" to updatedAuthorized,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            if (!alreadyInElderProfile) {
+                batch.update(
+                    elderRef,
+                    mapOf(
+                        "authorizedUids" to FieldValue.arrayUnion(uid),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-            )
+            }
             batch.commit().await()
-            Result.success(invite.elderName)
+            Result.success(safeElderName)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -710,8 +857,13 @@ class CareRepository(
 
         return try {
             val docRef = db.collection("medicine_logs").document(logId)
-            val snap = docRef.get().await()
-            if (snap.exists()) {
+            val existingDoc = db.collection("medicine_logs")
+                .whereArrayContains("authorizedUids", uid)
+                .get()
+                .await()
+                .documents
+                .firstOrNull { it.id == logId }
+            if (existingDoc != null && existingDoc.exists()) {
                 val updates = mapOf(
                     "status" to status,
                     "loggedByUid" to uid,
@@ -785,8 +937,13 @@ class CareRepository(
 
         return try {
             val docRef = db.collection("water_logs").document(logId)
-            val snap = docRef.get().await()
-            if (snap.exists()) {
+            val existingDoc = db.collection("water_logs")
+                .whereArrayContains("authorizedUids", uid)
+                .get()
+                .await()
+                .documents
+                .firstOrNull { it.id == logId }
+            if (existingDoc != null && existingDoc.exists()) {
                 docRef.update(
                     mapOf(
                         "glasses" to clampedGlasses,
@@ -1467,5 +1624,14 @@ class CareRepository(
         }
         out["updatedAt"] = FieldValue.serverTimestamp()
         return out
+    }
+
+    private companion object {
+        fun resolveFirebaseApp(context: Context): FirebaseApp {
+            val appCtx = context.applicationContext
+            return FirebaseApp.getApps(appCtx).firstOrNull()
+                ?: FirebaseApp.initializeApp(appCtx)
+                ?: FirebaseApp.getInstance()
+        }
     }
 }

@@ -26,6 +26,7 @@ import com.example.model.UserRole
 import com.example.model.VideoCallSession
 import com.example.model.WaterLog
 import com.example.model.WellnessTipsResult
+import com.example.notifications.EmergencySmsHelper
 import com.example.notifications.ReminderScheduler
 import com.example.sensors.FallDetectionAlert
 import com.example.sensors.FallDetectionMonitor
@@ -46,6 +47,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.UUID
+
+data class PendingSmsDispatch(
+    val dispatchId: String,
+    val elderId: String,
+    val elderName: String,
+    val contacts: List<EmergencyContact>,
+    val messageBody: String,
+    val source: String
+)
 
 data class CareDashboardData(
     val userProfile: UserProfile?,
@@ -110,6 +121,11 @@ class CareViewModel(
 
     private var fallCountdownJob: Job? = null
     private var lastHandledFallEventId: String? = null
+    private var lastPropagatedAuthUids: Set<String>? = null
+    private var lastCleanedInviteIds: Set<String> = emptySet()
+
+    private val _pendingSmsDispatch = MutableStateFlow<PendingSmsDispatch?>(null)
+    val pendingSmsDispatch: StateFlow<PendingSmsDispatch?> = _pendingSmsDispatch.asStateFlow()
 
     private val _selectedElderId = MutableStateFlow<String?>(null)
     val selectedElderId: StateFlow<String?> = _selectedElderId.asStateFlow()
@@ -178,11 +194,27 @@ class CareViewModel(
         )
     }
         .map<CareDashboardData, UiState<CareDashboardData>> { data ->
-            // Keep elder's care documents aligned if new caretaker linked
+            // Keep elder's care documents aligned when caretakers are linked or revoked
             val ownElder = data.elderProfiles.firstOrNull { it.elderId == currentUserId }
-            if (ownElder != null && ownElder.authorizedUids.size > 1) {
+            if (ownElder != null) {
+                val uidSet = ownElder.authorizedUids.toSet()
+                if (uidSet != lastPropagatedAuthUids && (uidSet.size > 1 || lastPropagatedAuthUids != null)) {
+                    lastPropagatedAuthUids = uidSet
+                    viewModelScope.launch {
+                        repository.propagateAuthorizedUidsForElder(ownElder.elderId, ownElder.authorizedUids)
+                    }
+                }
+            }
+            // Auto-delete stale, expired, or claimed pairing invites owned by this user
+            val today = repository.todayDateKey()
+            val staleIds = data.pairingInvites
+                .filter { !it.usableToday(today) }
+                .map { it.code.ifBlank { it.id } }
+                .toSet()
+            if (staleIds.isNotEmpty() && staleIds != lastCleanedInviteIds) {
+                lastCleanedInviteIds = staleIds
                 viewModelScope.launch {
-                    repository.propagateAuthorizedUidsForElder(ownElder.elderId, ownElder.authorizedUids)
+                    repository.cleanupStalePairingInvites(currentUserId)
                 }
             }
             UiState.Success(data)
@@ -600,6 +632,34 @@ class CareViewModel(
         }
     }
 
+    fun dismissPendingSmsDispatch() {
+        _pendingSmsDispatch.value = null
+    }
+
+    fun prepareSmsForSos(elder: ElderProfile, sos: SosEvent?) {
+        val data = (dashboardState.value as? UiState.Success<CareDashboardData>)?.data
+        val elderContacts = data?.emergencyContacts
+            ?.filter { it.elderId == elder.elderId }
+            ?.sortedBy { it.priorityOrder }
+            .orEmpty()
+        val body = EmergencySmsHelper.buildSosSmsBody(
+            elderName = elder.displayName,
+            areaLabel = sos?.areaLabel ?: elder.lastKnownArea ?: "Location not shared",
+            source = sos?.source ?: "manual",
+            peakGForce = sos?.peakGForce,
+            latitude = sos?.latitude,
+            longitude = sos?.longitude
+        )
+        _pendingSmsDispatch.value = PendingSmsDispatch(
+            dispatchId = UUID.randomUUID().toString(),
+            elderId = elder.elderId,
+            elderName = elder.displayName,
+            contacts = elderContacts,
+            messageBody = body,
+            source = sos?.source ?: "manual"
+        )
+    }
+
     fun triggerSos(
         elder: ElderProfile,
         source: String = "manual",
@@ -623,12 +683,33 @@ class CareViewModel(
                 source = source,
                 peakGForce = peakGForce
             ).onSuccess { out ->
+                val data = (dashboardState.value as? UiState.Success<CareDashboardData>)?.data
+                val elderContacts = data?.emergencyContacts
+                    ?.filter { it.elderId == elder.elderId }
+                    ?.sortedBy { it.priorityOrder }
+                    .orEmpty()
+                val smsBody = EmergencySmsHelper.buildSosSmsBody(
+                    elderName = elder.displayName,
+                    areaLabel = area,
+                    source = source,
+                    peakGForce = peakGForce,
+                    latitude = loc?.latitude,
+                    longitude = loc?.longitude
+                )
+                _pendingSmsDispatch.value = PendingSmsDispatch(
+                    dispatchId = out.documentId,
+                    elderId = elder.elderId,
+                    elderName = elder.displayName,
+                    contacts = elderContacts,
+                    messageBody = smsBody,
+                    source = source
+                )
                 _feedbackMessage.value = if (out.queuedOffline) {
                     "Offline: SOS queued to sync as soon as network returns."
                 } else if (source == "fall_detection" || source == "fall_simulation") {
-                    "Fall SOS alert delivered to linked caretakers."
+                    "Fall SOS alert sent to linked caretakers."
                 } else {
-                    "SOS alert delivered to linked caretakers."
+                    "SOS alert sent to linked caretakers."
                 }
             }.onFailure {
                 _feedbackMessage.value = it.localizedMessage ?: "Failed to send SOS alert."

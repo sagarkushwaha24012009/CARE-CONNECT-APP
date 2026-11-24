@@ -4,6 +4,28 @@
 
 ---
 
+## Download APK
+
+- **Direct Debug APK (Included Build Output):** [Download `app-debug.apk`](.build-outputs/app-debug.apk)
+- **Build Locally from Source:** Run `gradle :app:assembleDebug` to generate `app/build/outputs/apk/debug/app-debug.apk` (or generate a signed release APK/AAB via Android Studio's **Build → Generate Signed Bundle / APK**).
+- **Install on Android Device (e.g., Motorola Moto G35):** Download `.build-outputs/app-debug.apk` to your phone and open it to install (or run `adb install .build-outputs/app-debug.apk` over USB debugging).
+
+---
+
+## Screenshots & UI Previews
+
+> **Note:** Below are the bundled UI design previews and illustration assets from this repository. Live runtime screenshots can be captured directly from an Android device or emulator.
+
+| Elder Home Dashboard | Caretaker Dashboard | Wide / Tablet Reference |
+| :---: | :---: | :---: |
+| <img src="public/assets/aistudio/03_elder_home_dashboard_9x16_4d512ebf.png" alt="Elder Home Dashboard Preview" width="240" /> | <img src="public/assets/aistudio/02_caretaker_dashboard_9x16_9eb19935.png" alt="Caretaker Dashboard Preview" width="240" /> | <img src="public/assets/aistudio/01_caretaker_dashboard_reference_95d27744.png" alt="Caretaker Dashboard Wide Preview" width="320" /> |
+
+| App Icon | Onboarding Care Illustration |
+| :---: | :---: |
+| <img src="app/src/main/res/drawable/img_care_connect_icon.png" alt="Care Connect App Icon" width="120" /> | <img src="app/src/main/res/drawable/img_onboarding_care.jpg" alt="Care Connect Onboarding Illustration" width="280" /> |
+
+---
+
 ## Key Features
 
 ### Dual-Role Experience (Elder & Caretaker)

@@ -36,6 +36,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +73,7 @@ import com.example.model.ElderProfile
 import com.example.model.EmergencyContact
 import com.example.model.UiState
 import com.example.model.UserRole
+import com.example.notifications.EmergencySmsHelper
 import com.example.notifications.ReminderChannels
 import com.example.notifications.ReminderScheduler
 import com.example.sensors.FallDetectionMonitor
@@ -259,20 +261,22 @@ fun CareConnectApp() {
                         val workspaceStoreOwner = remember(backStackEntry) {
                             primaryNavController.getBackStackEntry(PrimaryHashRoute.WORKSPACE_GRAPH_ROUTE)
                         }
-                        AuthenticatedCareWorkspace(
-                            user = currentUser,
-                            workspaceRole = UserRole.ELDER,
-                            workspaceStoreOwner = workspaceStoreOwner,
-                            prefsDataStore = prefsDataStore,
-                            localPrefs = localPrefs,
-                            credentialManager = credentialManager,
-                            onSwitchPrimaryRole = { role ->
-                                hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
-                            },
-                            onSignedOut = {
-                                hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
-                            }
-                        )
+                        key(currentUser.uid) {
+                            AuthenticatedCareWorkspace(
+                                user = currentUser,
+                                workspaceRole = UserRole.ELDER,
+                                workspaceStoreOwner = workspaceStoreOwner,
+                                prefsDataStore = prefsDataStore,
+                                localPrefs = localPrefs,
+                                credentialManager = credentialManager,
+                                onSwitchPrimaryRole = { role ->
+                                    hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
+                                },
+                                onSignedOut = {
+                                    hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -284,20 +288,22 @@ fun CareConnectApp() {
                         val workspaceStoreOwner = remember(backStackEntry) {
                             primaryNavController.getBackStackEntry(PrimaryHashRoute.WORKSPACE_GRAPH_ROUTE)
                         }
-                        AuthenticatedCareWorkspace(
-                            user = currentUser,
-                            workspaceRole = UserRole.CARETAKER,
-                            workspaceStoreOwner = workspaceStoreOwner,
-                            prefsDataStore = prefsDataStore,
-                            localPrefs = localPrefs,
-                            credentialManager = credentialManager,
-                            onSwitchPrimaryRole = { role ->
-                                hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
-                            },
-                            onSignedOut = {
-                                hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
-                            }
-                        )
+                        key(currentUser.uid) {
+                            AuthenticatedCareWorkspace(
+                                user = currentUser,
+                                workspaceRole = UserRole.CARETAKER,
+                                workspaceStoreOwner = workspaceStoreOwner,
+                                prefsDataStore = prefsDataStore,
+                                localPrefs = localPrefs,
+                                credentialManager = credentialManager,
+                                onSwitchPrimaryRole = { role ->
+                                    hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
+                                },
+                                onSignedOut = {
+                                    hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -328,7 +334,7 @@ private fun AuthenticatedCareWorkspace(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     return CareViewModel(
-                        repository = CareRepository(context),
+                        repository = CareRepository(context, Firebase.auth),
                         prefsDataStore = prefsDataStore,
                         aiRepository = AiWellnessRepository(),
                         reminderScheduler = ReminderScheduler(context),
@@ -349,6 +355,7 @@ private fun AuthenticatedCareWorkspace(
     val fallTelemetry by viewModel.fallTelemetry.collectAsStateWithLifecycle()
     val fallCountdownSeconds by viewModel.fallCountdownSeconds.collectAsStateWithLifecycle()
     val pendingFallAlert by viewModel.pendingFallAlert.collectAsStateWithLifecycle()
+    val pendingSmsDispatch by viewModel.pendingSmsDispatch.collectAsStateWithLifecycle()
 
     // Ensure initial Firestore user/elder profile exists once signed in
     LaunchedEffect(user.uid) {
@@ -746,8 +753,11 @@ private fun AuthenticatedCareWorkspace(
                                         },
                                         onSyncNow = { viewModel.syncPendingChanges() },
                                         onSignOut = {
-                                            signOutUser(credentialManager = credentialManager, scope = scope)
-                                            onSignedOut()
+                                            signOutUser(
+                                                credentialManager = credentialManager,
+                                                scope = scope,
+                                                onSignOutComplete = onSignedOut
+                                            )
                                         }
                                     )
                                 }
@@ -876,10 +886,11 @@ private fun AuthenticatedCareWorkspace(
                                 ) { entry ->
                                     val elderId = Uri.decode(entry.arguments?.getString("elderId").orEmpty())
                                     val elder = elders.firstOrNull { it.elderId == elderId }
+                                    val activeSos = d.sosEvents.firstOrNull { it.elderId == elderId && it.status == "active" }
                                     SosScreen(
                                         elder = elder,
                                         userRole = activeRole,
-                                        activeSos = d.sosEvents.firstOrNull { it.elderId == elderId && it.status == "active" },
+                                        activeSos = activeSos,
                                         contacts = d.emergencyContacts.filter { it.elderId == elderId },
                                         onBack = { navController.popBackStack() },
                                         onTriggerSos = { viewModel.triggerSos(it) },
@@ -889,7 +900,8 @@ private fun AuthenticatedCareWorkspace(
                                             viewModel.toggleLocationSharing(target, enable)
                                         },
                                         onRefreshLocation = { viewModel.refreshLocationNow(it) },
-                                        onOpenFallDetection = { openElderRoute("fall_detection", elderId) }
+                                        onOpenFallDetection = { openElderRoute("fall_detection", elderId) },
+                                        onSendSms = { target, sos -> viewModel.prepareSmsForSos(target, sos) }
                                     )
                                 }
 
@@ -925,6 +937,10 @@ private fun AuthenticatedCareWorkspace(
                                 ) { entry ->
                                     val elderId = Uri.decode(entry.arguments?.getString("elderId").orEmpty())
                                     val elder = elders.firstOrNull { it.elderId == elderId }
+                                    val elderContactsCount = d.emergencyContacts.count { it.elderId == elderId }
+                                    val linkedCaretakersCount = d.caretakerLinks.count {
+                                        it.elderId == elderId && it.status == "active"
+                                    }
                                     FallDetectionScreen(
                                         elder = elder,
                                         fallDetectionEnabled = localPrefs.fallDetectionEnabled,
@@ -933,11 +949,14 @@ private fun AuthenticatedCareWorkspace(
                                         fallSosEvents = d.sosEvents.filter {
                                             it.elderId == elderId && it.source != "manual"
                                         },
+                                        emergencyContactsCount = elderContactsCount,
+                                        linkedCaretakersCount = linkedCaretakersCount,
                                         onBack = { navController.popBackStack() },
                                         onToggleEnabled = { enable -> viewModel.toggleFallDetection(elder, enable) },
                                         onSelectSensitivity = { viewModel.updateFallSensitivity(it) },
                                         onSimulateFall = { viewModel.triggerFallSimulation() },
-                                        onOpenSosScreen = { openElderRoute("sos", elderId) }
+                                        onOpenSosScreen = { openElderRoute("sos", elderId) },
+                                        onOpenEmergencyContacts = { openElderRoute("contacts", elderId) }
                                     )
                                 }
 
@@ -975,6 +994,13 @@ private fun AuthenticatedCareWorkspace(
         val targetElder = data?.elderProfiles?.firstOrNull { it.elderId == user.uid }
             ?: data?.elderProfiles?.firstOrNull { it.elderId == selectedElderId }
             ?: data?.elderProfiles?.firstOrNull()
+            ?: if (activeRole == UserRole.ELDER) {
+                ElderProfile(
+                    elderId = user.uid,
+                    displayName = data?.userProfile?.displayName?.ifBlank { user.displayName } ?: "Family Elder",
+                    authorizedUids = listOf(user.uid)
+                )
+            } else null
         FallSosCountdownDialog(
             secondsLeft = activeFallCountdown,
             alert = activeFallAlert,
@@ -987,6 +1013,48 @@ private fun AuthenticatedCareWorkspace(
                 }
             }
         )
+    }
+
+    pendingSmsDispatch?.let { dispatch ->
+        LaunchedEffect(dispatch.dispatchId) {
+            if (dispatch.contacts.isNotEmpty()) {
+                EmergencySmsHelper.launchSmsComposer(
+                    context = context,
+                    contacts = dispatch.contacts,
+                    messageBody = dispatch.messageBody
+                )
+            }
+        }
+        if (dispatch.contacts.isNotEmpty()) {
+            CareConfirmDialog(
+                title = "SOS & SMS Alert Ready",
+                message = "Cloud SOS alert sent to linked caretakers for ${dispatch.elderName}. Tap Open SMS App to send the prepared emergency SMS to ${dispatch.contacts.size} contact(s).",
+                confirmLabel = "Open SMS App",
+                confirmColor = tokens.butterYellow,
+                onConfirm = {
+                    EmergencySmsHelper.launchSmsComposer(
+                        context = context,
+                        contacts = dispatch.contacts,
+                        messageBody = dispatch.messageBody
+                    )
+                    viewModel.dismissPendingSmsDispatch()
+                },
+                onDismiss = { viewModel.dismissPendingSmsDispatch() }
+            )
+        } else {
+            CareConfirmDialog(
+                title = "Cloud SOS Sent — No SMS Contacts",
+                message = "Care Connect sent the emergency SOS alert to linked caretakers in the cloud, but no Emergency Contact phone numbers are saved yet for ${dispatch.elderName} to send an SMS.",
+                confirmLabel = "Add Contact",
+                confirmColor = tokens.mintGreen,
+                onConfirm = {
+                    val eId = dispatch.elderId
+                    viewModel.dismissPendingSmsDispatch()
+                    openElderRoute("contacts", eId)
+                },
+                onDismiss = { viewModel.dismissPendingSmsDispatch() }
+            )
+        }
     }
 
     contactToDialFromSos?.let { contact ->

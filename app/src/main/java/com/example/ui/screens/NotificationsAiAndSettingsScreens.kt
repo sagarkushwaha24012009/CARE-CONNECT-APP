@@ -605,8 +605,17 @@ fun ProfileSettingsScreen(
 
                 if (activeRole == UserRole.ELDER) {
                     val elderName = ownElderProfile?.displayName ?: userProfile?.displayName ?: "Elder"
+                    val todayKey = remember {
+                        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                    }
+                    Text(
+                        text = "Generate today's single-use code. Previous, used, or expired codes are automatically deleted. Caretakers only link once.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.secondaryInk
+                    )
+                    Spacer(Modifier.height(8.dp))
                     CareButton(
-                        text = "Generate 6-Character Pairing Code",
+                        text = "Generate Today's Pairing Code",
                         backgroundColor = tokens.butterYellow,
                         onClick = { onGeneratePairingCode(elderName) },
                         testTag = "settings_generate_code_button"
@@ -615,7 +624,7 @@ fun ProfileSettingsScreen(
                         Spacer(Modifier.height(6.dp))
                         Text(copiedMessage ?: "", style = MaterialTheme.typography.bodyMedium, color = tokens.ink)
                     }
-                    val activeInvites = pairingInvites.filter { it.status == "active" }
+                    val activeInvites = pairingInvites.filter { it.usableToday(todayKey) }
                     if (activeInvites.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
                         activeInvites.forEach { invite ->
@@ -632,18 +641,19 @@ fun ProfileSettingsScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = invite.code,
                                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
                                             color = tokens.ink
                                         )
                                         Text(
-                                            text = "Share only with a trusted caretaker",
+                                            text = "Valid today (${invite.dayKey}) • Auto-deletes after use or midnight",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = tokens.secondaryInk
                                         )
                                     }
+                                    Spacer(Modifier.width(8.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         CarePillButton(
                                             text = "Copy",
@@ -656,7 +666,7 @@ fun ProfileSettingsScreen(
                                             }
                                         )
                                         CarePillButton(
-                                            text = "Revoke",
+                                            text = "Delete",
                                             backgroundColor = tokens.sosCoral,
                                             onClick = { onRevokePairingCode(invite.code) }
                                         )
@@ -666,10 +676,11 @@ fun ProfileSettingsScreen(
                         }
                     }
 
-                    if (caretakerLinks.isNotEmpty()) {
+                    val activeLinks = caretakerLinks.filter { it.status == "active" }
+                    if (activeLinks.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
                         Text("Authorized Caretakers", style = MaterialTheme.typography.titleMedium, color = tokens.ink)
-                        caretakerLinks.forEach { link ->
+                        activeLinks.forEach { link ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -689,7 +700,7 @@ fun ProfileSettingsScreen(
                     }
                 } else {
                     Text(
-                        text = "Enter an elder's 6-character pairing code to connect and manage their care.",
+                        text = "Enter an elder's daily 6-character pairing code once to connect permanently.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = tokens.secondaryInk
                     )

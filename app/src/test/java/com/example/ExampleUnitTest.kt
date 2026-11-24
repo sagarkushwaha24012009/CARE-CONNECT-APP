@@ -1,22 +1,27 @@
 package com.example
 
 import com.example.model.ElderProfile
+import com.example.model.EmergencyContact
 import com.example.model.FallSensitivity
 import com.example.model.MedicineSchedule
+import com.example.model.PairingInvite
 import com.example.model.SosEvent
 import com.example.model.UserRole
 import com.example.model.VideoCallSession
+import com.example.notifications.EmergencySmsHelper
 import com.example.ui.navigation.HashRouterState
 import com.example.ui.navigation.PrimaryHashRoute
 import com.example.ui.navigation.resolveTargetPrimaryHash
 import com.example.ui.theme.TextScaleOption
 import com.example.ui.theme.ThemePreset
 import com.example.ui.theme.careTokensFor
+import com.google.firebase.Timestamp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Date
 
 class ExampleUnitTest {
 
@@ -119,5 +124,53 @@ class ExampleUnitTest {
         val popped = router.popBack()
         assertEquals(PrimaryHashRoute.AUTH, popped)
         assertEquals("#/auth", router.currentHash.value)
+    }
+
+    @Test
+    fun pairing_invite_enforces_daily_rotation_and_expiration() {
+        val now = 1_700_000_000_000L
+        val validInvite = PairingInvite(
+            code = "ABC234",
+            elderId = "e1",
+            elderName = "Grandpa",
+            status = "active",
+            dayKey = "2026-11-24",
+            expiresAt = Timestamp(Date(now + 3_600_000L))
+        )
+        assertFalse(validInvite.hasExpiredAt(now))
+        assertTrue(validInvite.usableToday("2026-11-24", now))
+        assertFalse(validInvite.usableToday("2026-11-25", now))
+        assertFalse(validInvite.copy(status = "claimed").usableToday("2026-11-24", now))
+
+        val expiredInvite = validInvite.copy(expiresAt = Timestamp(Date(now - 1000L)))
+        assertTrue(expiredInvite.hasExpiredAt(now))
+        assertFalse(expiredInvite.usableToday("2026-11-24", now))
+
+        val legacyInviteWithoutExpiry = validInvite.copy(expiresAt = null)
+        assertTrue(legacyInviteWithoutExpiry.hasExpiredAt(now))
+        assertFalse(legacyInviteWithoutExpiry.usableToday("2026-11-24", now))
+    }
+
+    @Test
+    fun emergency_sms_helper_formats_recipients_and_sos_message() {
+        val contacts = listOf(
+            EmergencyContact(id = "c2", elderId = "e1", name = "Doctor", phoneNumber = "+1 (555) 222-3333", priorityOrder = 2),
+            EmergencyContact(id = "c1", elderId = "e1", name = "Daughter", phoneNumber = "+1-555-111-0000", priorityOrder = 1),
+            EmergencyContact(id = "c3", elderId = "e1", name = "Duplicate", phoneNumber = "+1 555 111 0000", priorityOrder = 3)
+        )
+        assertEquals("+15551110000;+15552223333", EmergencySmsHelper.buildRecipientsString(contacts))
+
+        val body = EmergencySmsHelper.buildSosSmsBody(
+            elderName = "Grandpa Arthur",
+            areaLabel = "Near Oak Street",
+            source = "fall_detection",
+            peakGForce = 3.25,
+            latitude = 37.422,
+            longitude = -122.084
+        )
+        assertTrue(body.contains("Grandpa Arthur"))
+        assertTrue(body.contains("Fall detected (3.2G impact)") || body.contains("Fall detected (3.3G impact)"))
+        assertTrue(body.contains("Near Oak Street"))
+        assertTrue(body.contains("https://maps.google.com/?q=37.42200,-122.08400"))
     }
 }

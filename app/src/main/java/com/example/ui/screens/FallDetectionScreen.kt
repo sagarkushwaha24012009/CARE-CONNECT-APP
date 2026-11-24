@@ -60,11 +60,14 @@ fun FallDetectionScreen(
     sensitivity: FallSensitivity,
     telemetry: FallTelemetryState,
     fallSosEvents: List<SosEvent>,
+    emergencyContactsCount: Int = 0,
+    linkedCaretakersCount: Int = 0,
     onBack: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
     onSelectSensitivity: (FallSensitivity) -> Unit,
     onSimulateFall: () -> Unit,
-    onOpenSosScreen: () -> Unit
+    onOpenSosScreen: () -> Unit,
+    onOpenEmergencyContacts: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
     val tokens = LocalCareColors.current
@@ -227,6 +230,30 @@ fun FallDetectionScreen(
                     onClick = onSimulateFall,
                     testTag = "fall_simulate_button"
                 )
+            }
+
+            // 3b. Alert & SMS Readiness Card
+            CareCard(backgroundColor = tokens.softPink) {
+                Text(
+                    text = "SOS & SMS Alert Readiness",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = tokens.ink
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "When a fall SOS triggers, Care Connect notifies $linkedCaretakersCount linked caretaker(s) in the cloud and prepares an SMS alert for $emergencyContactsCount emergency contact(s).",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = tokens.ink
+                )
+                if (emergencyContactsCount == 0) {
+                    Spacer(Modifier.height(10.dp))
+                    CareButton(
+                        text = "Add Emergency Contact for SMS",
+                        backgroundColor = tokens.cardSurface,
+                        onClick = onOpenEmergencyContacts,
+                        testTag = "fall_add_contact_button"
+                    )
+                }
             }
 
             // 4. Recent Fall-Triggered SOS Alerts
