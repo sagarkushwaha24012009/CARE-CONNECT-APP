@@ -68,6 +68,7 @@ service cloud.firestore {
              (!('lastLocationAt' in data) || isValidTimestamp(data.lastLocationAt)) &&
              (!('ageLabel' in data) || (data.ageLabel is string && data.ageLabel.size() <= 20)) &&
              (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             (!('fallDetectionEnabled' in data) || data.fallDetectionEnabled is bool) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -170,7 +171,7 @@ service cloud.firestore {
 
     function isValidNotificationItem(data) {
       return isValidId(data.elderId) &&
-             data.category in ['medicine', 'task', 'appointment', 'sos', 'system'] &&
+             data.category in ['medicine', 'task', 'appointment', 'sos', 'call', 'system'] &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
              data.body is string && data.body.size() >= 1 && data.body.size() <= 240 &&
              data.readStatus in ['unread', 'read'] &&
@@ -188,6 +189,25 @@ service cloud.firestore {
              (!('longitude' in data) || (data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0)) &&
              data.deliveryState in ['delivered', 'acknowledged', 'cancelled'] &&
              (!('acknowledgedByUid' in data) || (data.acknowledgedByUid is string && data.acknowledgedByUid.size() <= 128)) &&
+             (!('source' in data) || data.source in ['manual', 'fall_detection', 'fall_simulation']) &&
+             (!('peakGForce' in data) || (data.peakGForce is number && data.peakGForce >= 0.0 && data.peakGForce <= 50.0)) &&
+             isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidVideoCall(data) {
+      return isValidId(data.elderId) &&
+             data.elderName is string && data.elderName.size() >= 1 && data.elderName.size() <= 60 &&
+             isValidId(data.callerUid) &&
+             data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 60 &&
+             data.callerRole in ['elder', 'caretaker'] &&
+             data.roomCode is string && data.roomCode.matches('^[A-Z0-9]{8,12}$') &&
+             data.callStatus in ['ringing', 'active', 'ended', 'declined'] &&
+             data.callerCameraEnabled is bool &&
+             data.calleeCameraEnabled is bool &&
+             data.callerMicMuted is bool &&
+             data.calleeMicMuted is bool &&
              isValidAuthorizedUids(data.authorizedUids, data.elderId) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
@@ -224,7 +244,7 @@ service cloud.firestore {
                        incoming().elderId == elderId &&
                        (request.auth.uid == elderId || request.auth.uid in incoming().authorizedUids) &&
                        incoming().keys().hasAll(['elderId', 'displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'authorizedUids', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['elderId', 'displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'fallDetectionEnabled', 'authorizedUids', 'createdAt', 'updatedAt']) &&
                        isValidElderProfile(incoming());
 
       allow update: if isSignedIn() &&
@@ -234,7 +254,7 @@ service cloud.firestore {
                        isValidElderProfile(incoming()) && (
                          // Authorized member updating profile/location/goal/links
                          (request.auth.uid in existing().authorizedUids &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'authorizedUids', 'updatedAt'])) ||
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'dailyWaterGoal', 'locationSharingEnabled', 'onlineStatus', 'avatarKey', 'lastKnownArea', 'lastLocationAt', 'ageLabel', 'notes', 'fallDetectionEnabled', 'authorizedUids', 'updatedAt'])) ||
                          // Caretaker linking via verified caretaker_links batch creation
                          (!(request.auth.uid in existing().authorizedUids) &&
                           request.auth.uid in incoming().authorizedUids &&
@@ -479,7 +499,7 @@ service cloud.firestore {
                        incoming().status == 'active' &&
                        incoming().deliveryState == 'delivered' &&
                        incoming().keys().hasAll(['elderId', 'elderName', 'status', 'areaLabel', 'deliveryState', 'authorizedUids', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['elderId', 'elderName', 'status', 'areaLabel', 'latitude', 'longitude', 'deliveryState', 'acknowledgedByUid', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'elderName', 'status', 'areaLabel', 'latitude', 'longitude', 'deliveryState', 'acknowledgedByUid', 'source', 'peakGForce', 'authorizedUids', 'createdAt', 'updatedAt']) &&
                        isValidSosEvent(incoming()) &&
                        isElderMember(incoming().elderId);
 
@@ -498,6 +518,32 @@ service cloud.firestore {
                           incoming().deliveryState == 'cancelled' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'deliveryState', 'updatedAt']))
                        );
+
+      allow delete: if false;
+    }
+
+    match /video_calls/{callId} {
+      allow get, list: if isSignedIn() && request.auth.uid in resource.data.authorizedUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(callId) &&
+                       incoming().callerUid == request.auth.uid &&
+                       request.auth.uid in incoming().authorizedUids &&
+                       incoming().callStatus == 'ringing' &&
+                       incoming().keys().hasAll(['elderId', 'elderName', 'callerUid', 'callerName', 'callerRole', 'roomCode', 'callStatus', 'callerCameraEnabled', 'calleeCameraEnabled', 'callerMicMuted', 'calleeMicMuted', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['elderId', 'elderName', 'callerUid', 'callerName', 'callerRole', 'roomCode', 'callStatus', 'callerCameraEnabled', 'calleeCameraEnabled', 'callerMicMuted', 'calleeMicMuted', 'authorizedUids', 'createdAt', 'updatedAt']) &&
+                       isValidVideoCall(incoming()) &&
+                       isElderMember(incoming().elderId);
+
+      allow update: if isSignedIn() &&
+                       isValidId(callId) &&
+                       request.auth.uid in existing().authorizedUids &&
+                       incoming().elderId == existing().elderId &&
+                       incoming().callerUid == existing().callerUid &&
+                       incoming().roomCode == existing().roomCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidVideoCall(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['callStatus', 'callerCameraEnabled', 'calleeCameraEnabled', 'callerMicMuted', 'calleeMicMuted', 'authorizedUids', 'updatedAt']);
 
       allow delete: if false;
     }

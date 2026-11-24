@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.Icon
@@ -75,6 +77,7 @@ fun ElderHomeScreen(
     tasks: List<CareTask>,
     contacts: List<EmergencyContact>,
     activeSos: SosEvent?,
+    fallDetectionEnabled: Boolean = true,
     onMarkMedicineTaken: (MedicineSchedule) -> Unit,
     onAddWater: () -> Unit,
     onOpenMedicines: () -> Unit,
@@ -83,6 +86,8 @@ fun ElderHomeScreen(
     onOpenContacts: () -> Unit,
     onOpenAiTips: () -> Unit,
     onOpenSos: () -> Unit,
+    onOpenVideoCall: () -> Unit = {},
+    onOpenFallDetection: () -> Unit = {},
     onOpenLocationControls: () -> Unit
 ) {
     val tokens = LocalCareColors.current
@@ -377,6 +382,33 @@ fun ElderHomeScreen(
                         .weight(1f)
                         .testTag("elder_sos_tile"),
                     onClick = onOpenSos
+                )
+            }
+
+            // 5b. Grid Row 3: Video Call (Mint Green) + Fall Sensor (Butter Yellow)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ElderGridTile(
+                    title = "Video Call",
+                    subtitle = "Family Check-in",
+                    icon = Icons.Filled.Videocam,
+                    backgroundColor = tokens.mintGreen,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("elder_video_call_tile"),
+                    onClick = onOpenVideoCall
+                )
+                ElderGridTile(
+                    title = "Fall Sensor",
+                    subtitle = if (fallDetectionEnabled) "Active" else "Paused",
+                    icon = Icons.Filled.Sensors,
+                    backgroundColor = tokens.butterYellow,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("elder_fall_detection_tile"),
+                    onClick = onOpenFallDetection
                 )
             }
 

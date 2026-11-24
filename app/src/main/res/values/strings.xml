@@ -16,4 +16,8 @@
     <string name="cd_notifications">Open notifications</string>
     <string name="cd_settings">Open settings</string>
     <string name="cd_elder_avatar">Elder profile illustration</string>
+    <string name="video_call_title">Video Call</string>
+    <string name="video_call_security_notice">Only elders and caretakers authorized via a verified pairing link can initiate or join calls.</string>
+    <string name="fall_detection_title">Fall Detection</string>
+    <string name="fall_detection_safety_notice">Monitors device motion via the accelerometer and starts a 15-second SOS countdown if a fall pattern is detected. Keep your phone carried securely for real monitoring, or use Safety Simulation Mode to test.</string>
 </resources>

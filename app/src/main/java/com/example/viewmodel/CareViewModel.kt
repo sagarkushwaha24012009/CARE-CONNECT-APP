@@ -15,6 +15,7 @@ import com.example.model.CareTask
 import com.example.model.CaretakerLink
 import com.example.model.ElderProfile
 import com.example.model.EmergencyContact
+import com.example.model.FallSensitivity
 import com.example.model.MedicineLog
 import com.example.model.MedicineSchedule
 import com.example.model.PairingInvite
@@ -22,13 +23,19 @@ import com.example.model.SosEvent
 import com.example.model.UiState
 import com.example.model.UserProfile
 import com.example.model.UserRole
+import com.example.model.VideoCallSession
 import com.example.model.WaterLog
 import com.example.model.WellnessTipsResult
 import com.example.notifications.ReminderScheduler
+import com.example.sensors.FallDetectionAlert
+import com.example.sensors.FallDetectionMonitor
+import com.example.sensors.FallTelemetryState
 import com.example.ui.theme.TextScaleOption
 import com.example.ui.theme.ThemePreset
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -53,6 +60,7 @@ data class CareDashboardData(
     val appointments: List<CareAppointment>,
     val notifications: List<CareNotification>,
     val sosEvents: List<SosEvent>,
+    val videoCalls: List<VideoCallSession>,
     val pendingSyncOps: List<PendingSyncOpEntity>
 )
 
@@ -75,6 +83,7 @@ private data class DailyCareBundle(
 private data class AlertsBundle(
     val notifications: List<CareNotification>,
     val sosEvents: List<SosEvent>,
+    val videoCalls: List<VideoCallSession>,
     val pendingSyncOps: List<PendingSyncOpEntity>
 )
 
@@ -84,11 +93,23 @@ class CareViewModel(
     private val aiRepository: AiWellnessRepository,
     private val reminderScheduler: ReminderScheduler,
     private val locationHelper: LocationHelper,
+    private val fallDetectionMonitor: FallDetectionMonitor,
     private val currentUserId: String
 ) : ViewModel() {
 
     val localPrefs: StateFlow<LocalAppPreferences> = prefsDataStore.preferencesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalAppPreferences())
+
+    val fallTelemetry: StateFlow<FallTelemetryState> = fallDetectionMonitor.telemetry
+
+    private val _fallCountdownSeconds = MutableStateFlow<Int?>(null)
+    val fallCountdownSeconds: StateFlow<Int?> = _fallCountdownSeconds.asStateFlow()
+
+    private val _pendingFallAlert = MutableStateFlow<FallDetectionAlert?>(null)
+    val pendingFallAlert: StateFlow<FallDetectionAlert?> = _pendingFallAlert.asStateFlow()
+
+    private var fallCountdownJob: Job? = null
+    private var lastHandledFallEventId: String? = null
 
     private val _selectedElderId = MutableStateFlow<String?>(null)
     val selectedElderId: StateFlow<String?> = _selectedElderId.asStateFlow()
@@ -128,9 +149,10 @@ class CareViewModel(
     private val alertsBundle: Flow<AlertsBundle> = combine(
         repository.observeNotifications(currentUserId),
         repository.observeSosEvents(currentUserId),
+        repository.observeVideoCalls(currentUserId),
         repository.observePendingOps(currentUserId)
-    ) { notifs, sos, pending ->
-        AlertsBundle(notifs, sos, pending)
+    ) { notifs, sos, calls, pending ->
+        AlertsBundle(notifs, sos, calls, pending)
     }
 
     val dashboardState: StateFlow<UiState<CareDashboardData>> = combine(
@@ -151,6 +173,7 @@ class CareViewModel(
             appointments = daily.appointments,
             notifications = alerts.notifications.sortedByDescending { it.createdAt?.seconds ?: 0L },
             sosEvents = alerts.sosEvents.sortedByDescending { it.createdAt?.seconds ?: 0L },
+            videoCalls = alerts.videoCalls.sortedByDescending { it.createdAt?.seconds ?: 0L },
             pendingSyncOps = alerts.pendingSyncOps
         )
     }
@@ -178,6 +201,33 @@ class CareViewModel(
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
             initialValue = UiState.Loading
         )
+
+    init {
+        viewModelScope.launch {
+            localPrefs.collect { prefs ->
+                if (prefs.fallDetectionEnabled && prefs.selectedRole == UserRole.ELDER) {
+                    fallDetectionMonitor.startMonitoring(prefs.fallSensitivity)
+                } else if (!prefs.fallDetectionEnabled) {
+                    fallDetectionMonitor.stopMonitoring()
+                } else {
+                    fallDetectionMonitor.updateSensitivity(prefs.fallSensitivity)
+                }
+            }
+        }
+        viewModelScope.launch {
+            fallDetectionMonitor.telemetry.collect { state ->
+                val alert = state.lastDetectedEvent ?: return@collect
+                if (alert.eventId == lastHandledFallEventId) return@collect
+                lastHandledFallEventId = alert.eventId
+                startFallSosCountdown(alert)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        fallDetectionMonitor.stopMonitoring()
+        super.onCleared()
+    }
 
     fun setNetworkOnline(online: Boolean) {
         val wasOffline = !_isOnline.value
@@ -550,7 +600,11 @@ class CareViewModel(
         }
     }
 
-    fun triggerSos(elder: ElderProfile) {
+    fun triggerSos(
+        elder: ElderProfile,
+        source: String = "manual",
+        peakGForce: Double? = null
+    ) {
         viewModelScope.launch {
             _isBusy.value = true
             val loc = if (elder.locationSharingEnabled && locationHelper.hasLocationPermission()) {
@@ -565,10 +619,14 @@ class CareViewModel(
                 elder = elder,
                 areaLabel = area,
                 latitude = loc?.latitude,
-                longitude = loc?.longitude
+                longitude = loc?.longitude,
+                source = source,
+                peakGForce = peakGForce
             ).onSuccess { out ->
                 _feedbackMessage.value = if (out.queuedOffline) {
                     "Offline: SOS queued to sync as soon as network returns."
+                } else if (source == "fall_detection" || source == "fall_simulation") {
+                    "Fall SOS alert delivered to linked caretakers."
                 } else {
                     "SOS alert delivered to linked caretakers."
                 }
@@ -576,6 +634,158 @@ class CareViewModel(
                 _feedbackMessage.value = it.localizedMessage ?: "Failed to send SOS alert."
             }
             _isBusy.value = false
+        }
+    }
+
+    fun toggleFallDetection(elder: ElderProfile?, enable: Boolean) {
+        viewModelScope.launch {
+            prefsDataStore.setFallDetectionEnabled(enable)
+            if (enable) {
+                fallDetectionMonitor.startMonitoring(localPrefs.value.fallSensitivity)
+            } else {
+                fallDetectionMonitor.stopMonitoring()
+                cancelFallCountdown(silent = true)
+            }
+            if (elder != null) {
+                repository.updateElderProfile(elderId = elder.elderId, fallDetectionEnabled = enable)
+            }
+            _feedbackMessage.value = if (enable) "Fall detection monitoring enabled." else "Fall detection paused."
+        }
+    }
+
+    fun updateFallSensitivity(sensitivity: FallSensitivity) {
+        viewModelScope.launch {
+            prefsDataStore.setFallSensitivity(sensitivity)
+            fallDetectionMonitor.updateSensitivity(sensitivity)
+            _feedbackMessage.value = "Fall sensitivity set to ${sensitivity.label}."
+        }
+    }
+
+    fun triggerFallSimulation() {
+        fallDetectionMonitor.triggerSimulatedFall()
+    }
+
+    private fun startFallSosCountdown(alert: FallDetectionAlert) {
+        fallCountdownJob?.cancel()
+        _pendingFallAlert.value = alert
+        reminderScheduler.showImmediateNotification(
+            id = alert.eventId.hashCode(),
+            title = if (alert.isSimulation) "Simulated Fall Detected" else "Fall Detected!",
+            body = "Sending SOS alert in 15 seconds unless cancelled."
+        )
+        fallCountdownJob = viewModelScope.launch {
+            for (sec in 15 downTo 1) {
+                _fallCountdownSeconds.value = sec
+                delay(1000L)
+            }
+            _fallCountdownSeconds.value = 0
+            val targetElder = resolveActiveElderForFall()
+            if (targetElder != null) {
+                confirmFallSosNow(targetElder)
+            } else {
+                _pendingFallAlert.value = null
+                _fallCountdownSeconds.value = null
+                fallDetectionMonitor.clearDetectedEvent()
+                _feedbackMessage.value = "Fall detected, but no elder profile was found to dispatch SOS."
+            }
+        }
+    }
+
+    fun cancelFallCountdown(silent: Boolean = false) {
+        fallCountdownJob?.cancel()
+        fallCountdownJob = null
+        _fallCountdownSeconds.value = null
+        _pendingFallAlert.value = null
+        fallDetectionMonitor.clearDetectedEvent()
+        if (!silent) {
+            _feedbackMessage.value = "Fall SOS cancelled — glad you are okay!"
+        }
+    }
+
+    fun confirmFallSosNow(elder: ElderProfile) {
+        val alert = _pendingFallAlert.value
+        fallCountdownJob?.cancel()
+        fallCountdownJob = null
+        _fallCountdownSeconds.value = null
+        _pendingFallAlert.value = null
+        fallDetectionMonitor.clearDetectedEvent()
+        val source = if (alert?.isSimulation == true) "fall_simulation" else "fall_detection"
+        triggerSos(
+            elder = elder,
+            source = source,
+            peakGForce = alert?.peakGForce?.toDouble()
+        )
+    }
+
+    private fun resolveActiveElderForFall(): ElderProfile? {
+        val data = (dashboardState.value as? UiState.Success<CareDashboardData>)?.data ?: return null
+        val selected = _selectedElderId.value
+        return data.elderProfiles.firstOrNull { it.elderId == currentUserId }
+            ?: data.elderProfiles.firstOrNull { it.elderId == selected }
+            ?: data.elderProfiles.firstOrNull()
+    }
+
+    fun startVideoCall(
+        elder: ElderProfile,
+        callerName: String,
+        callerRole: UserRole,
+        onStarted: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.startVideoCall(elder, callerName, callerRole)
+                .onSuccess { session ->
+                    _feedbackMessage.value = "Calling ${elder.displayName}..."
+                    onStarted(session.id)
+                }
+                .onFailure {
+                    _feedbackMessage.value = it.localizedMessage ?: "Unable to start video call."
+                }
+            _isBusy.value = false
+        }
+    }
+
+    fun answerVideoCall(call: VideoCallSession) {
+        viewModelScope.launch {
+            repository.updateVideoCallState(callId = call.id, callStatus = "active")
+                .onFailure { _feedbackMessage.value = it.localizedMessage ?: "Unable to answer call." }
+        }
+    }
+
+    fun declineVideoCall(call: VideoCallSession) {
+        viewModelScope.launch {
+            repository.updateVideoCallState(callId = call.id, callStatus = "declined")
+                .onFailure { _feedbackMessage.value = it.localizedMessage ?: "Unable to decline call." }
+        }
+    }
+
+    fun endVideoCall(call: VideoCallSession) {
+        viewModelScope.launch {
+            repository.updateVideoCallState(callId = call.id, callStatus = "ended")
+                .onSuccess { _feedbackMessage.value = "Video call ended." }
+                .onFailure { _feedbackMessage.value = it.localizedMessage ?: "Unable to end call." }
+        }
+    }
+
+    fun toggleCallCamera(call: VideoCallSession, enabled: Boolean) {
+        val isCaller = call.callerUid == currentUserId
+        viewModelScope.launch {
+            repository.updateVideoCallState(
+                callId = call.id,
+                callerCameraEnabled = if (isCaller) enabled else null,
+                calleeCameraEnabled = if (!isCaller) enabled else null
+            )
+        }
+    }
+
+    fun toggleCallMic(call: VideoCallSession, muted: Boolean) {
+        val isCaller = call.callerUid == currentUserId
+        viewModelScope.launch {
+            repository.updateVideoCallState(
+                callId = call.id,
+                callerMicMuted = if (isCaller) muted else null,
+                calleeMicMuted = if (!isCaller) muted else null
+            )
         }
     }
 

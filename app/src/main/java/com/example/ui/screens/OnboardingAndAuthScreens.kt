@@ -65,6 +65,57 @@ import com.example.ui.components.CareStatusBadge
 import com.example.ui.theme.LocalCareColors
 
 @Composable
+fun SplashScreen(
+    statusMessage: String = "Preparing your family care space..."
+) {
+    val tokens = LocalCareColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(tokens.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        CareCard(
+            backgroundColor = tokens.headerSurface,
+            modifier = Modifier
+                .widthIn(max = 460.dp)
+                .fillMaxWidth()
+                .testTag("splash_screen_card"),
+            contentPadding = PaddingValues(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CareConnectLogoMark(modifier = Modifier.size(72.dp))
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.displaySmall,
+                    color = tokens.ink
+                )
+                Text(
+                    text = stringResource(R.string.tagline_elder),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.secondaryInk
+                )
+                CareStatusBadge(
+                    label = statusMessage,
+                    backgroundColor = tokens.cardSurface
+                )
+                CircularProgressIndicator(
+                    color = tokens.ink,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun OnboardingScreen(
     onContinue: () -> Unit
 ) {

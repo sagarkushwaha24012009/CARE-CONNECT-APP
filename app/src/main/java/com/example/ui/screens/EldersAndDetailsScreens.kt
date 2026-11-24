@@ -34,7 +34,9 @@ import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -95,6 +97,8 @@ fun EldersListScreen(
     onOpenTasks: (String) -> Unit,
     onOpenContacts: (String) -> Unit,
     onOpenAppointments: (String) -> Unit,
+    onOpenVideoCall: (String) -> Unit = {},
+    onOpenFallDetection: (String) -> Unit = {},
     onOpenPairingSettings: () -> Unit
 ) {
     val tokens = LocalCareColors.current
@@ -293,6 +297,22 @@ fun EldersListScreen(
                         testTag = "care_hub_contacts",
                         onClick = { onOpenContacts(primaryElder.elderId) }
                     )
+                    CareModuleShortcutCard(
+                        title = "Video Call",
+                        subtitle = "Call linked family caretakers",
+                        icon = Icons.Filled.Videocam,
+                        backgroundColor = tokens.mintGreen,
+                        testTag = "care_hub_video_call",
+                        onClick = { onOpenVideoCall(primaryElder.elderId) }
+                    )
+                    CareModuleShortcutCard(
+                        title = "Fall Detection Sensor",
+                        subtitle = "Motion monitor & SOS countdown",
+                        icon = Icons.Filled.Sensors,
+                        backgroundColor = tokens.softPink,
+                        testTag = "care_hub_fall_detection",
+                        onClick = { onOpenFallDetection(primaryElder.elderId) }
+                    )
                 }
 
                 CareCard(backgroundColor = tokens.cardSurface) {
@@ -422,6 +442,8 @@ fun ElderDetailsScreen(
     onOpenContacts: () -> Unit,
     onOpenAppointments: () -> Unit,
     onOpenSos: () -> Unit,
+    onOpenVideoCall: () -> Unit = {},
+    onOpenFallDetection: () -> Unit = {},
     onRevokeCaretakerLink: (CaretakerLink) -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -586,6 +608,30 @@ fun ElderDetailsScreen(
                         modifier = Modifier.weight(1f),
                         testTag = "details_sos_button",
                         onClick = onOpenSos
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CareModuleShortcutCard(
+                        title = "Video Call",
+                        subtitle = "Family Call",
+                        icon = Icons.Filled.Videocam,
+                        backgroundColor = tokens.mintGreen,
+                        modifier = Modifier.weight(1f),
+                        testTag = "details_video_call_button",
+                        onClick = onOpenVideoCall
+                    )
+                    CareModuleShortcutCard(
+                        title = "Fall Sensor",
+                        subtitle = if (elder.fallDetectionEnabled) "Active" else "Paused",
+                        icon = Icons.Filled.Sensors,
+                        backgroundColor = tokens.skyBlue,
+                        modifier = Modifier.weight(1f),
+                        testTag = "details_fall_detection_button",
+                        onClick = onOpenFallDetection
                     )
                 }
 

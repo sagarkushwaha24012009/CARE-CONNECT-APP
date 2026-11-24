@@ -52,6 +52,7 @@ data class ElderProfile(
     @ServerTimestamp val lastLocationAt: Timestamp? = null,
     val ageLabel: String? = null,
     val notes: String? = null,
+    val fallDetectionEnabled: Boolean = true,
     val authorizedUids: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -202,10 +203,43 @@ data class SosEvent(
     val longitude: Double? = null,
     val deliveryState: String = "delivered",
     val acknowledgedByUid: String? = null,
+    val source: String = "manual",
+    val peakGForce: Double? = null,
     val authorizedUids: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
+
+@Keep
+@IgnoreExtraProperties
+data class VideoCallSession(
+    @DocumentId val id: String = "",
+    val elderId: String = "",
+    val elderName: String = "",
+    val callerUid: String = "",
+    val callerName: String = "",
+    val callerRole: String = UserRole.CARETAKER.wire,
+    val roomCode: String = "",
+    val callStatus: String = "ringing",
+    val callerCameraEnabled: Boolean = true,
+    val calleeCameraEnabled: Boolean = true,
+    val callerMicMuted: Boolean = false,
+    val calleeMicMuted: Boolean = false,
+    val authorizedUids: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+enum class FallSensitivity(val id: String, val label: String, val impactThresholdG: Float) {
+    LOW("low", "Low", 3.2f),
+    MEDIUM("medium", "Medium", 2.6f),
+    HIGH("high", "High", 2.1f);
+
+    companion object {
+        fun fromId(raw: String?): FallSensitivity =
+            entries.firstOrNull { it.id == raw } ?: MEDIUM
+    }
+}
 
 @Keep
 data class WellnessTipItem(

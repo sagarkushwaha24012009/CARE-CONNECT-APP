@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,6 +68,7 @@ import com.example.ui.components.CareConfirmDialog
 import com.example.ui.components.CarePillButton
 import com.example.ui.components.CareStatusBadge
 import com.example.ui.theme.LocalCareColors
+import java.util.Locale
 
 fun launchDialerIntent(context: Context, phoneNumber: String): Boolean {
     val cleaned = phoneNumber.filter { it.isDigit() || it == '+' }
@@ -372,7 +374,8 @@ fun SosScreen(
     onAcknowledgeSos: (String) -> Unit,
     onCancelSos: (String) -> Unit,
     onToggleLocationSharing: (ElderProfile, Boolean) -> Unit,
-    onRefreshLocation: (ElderProfile) -> Unit
+    onRefreshLocation: (ElderProfile) -> Unit,
+    onOpenFallDetection: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
     val tokens = LocalCareColors.current
@@ -458,11 +461,26 @@ fun SosScreen(
                             }
                         }
                         Spacer(Modifier.height(10.dp))
-                        CareStatusBadge(
-                            label = deliveryLabel,
-                            backgroundColor = tokens.cardSurface,
-                            icon = Icons.Filled.CheckCircle
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CareStatusBadge(
+                                label = deliveryLabel,
+                                backgroundColor = tokens.cardSurface,
+                                icon = Icons.Filled.CheckCircle
+                            )
+                            if (activeSos.source != "manual") {
+                                val impactSuffix = activeSos.peakGForce?.let {
+                                    " • ${String.format(Locale.US, "%.1f", it)}G"
+                                } ?: ""
+                                CareStatusBadge(
+                                    label = (if (activeSos.source == "fall_simulation") "Safety Sim" else "Fall Detected") + impactSuffix,
+                                    backgroundColor = tokens.butterYellow,
+                                    icon = Icons.Filled.Sensors
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -566,6 +584,43 @@ fun SosScreen(
                             icon = Icons.Filled.Refresh,
                             backgroundColor = tokens.butterYellow,
                             onClick = { onRefreshLocation(elder) }
+                        )
+                    }
+                }
+
+                // Fall Detection Sensor Shortcut Card
+                CareCard(backgroundColor = tokens.butterYellow, onClick = onOpenFallDetection) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Filled.Sensors,
+                                contentDescription = null,
+                                tint = tokens.ink,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Fall Detection Sensor",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = tokens.ink
+                                )
+                                Text(
+                                    text = if (elder.fallDetectionEnabled) "Active • Auto-SOS countdown enabled" else "Paused • Tap to configure or test",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = tokens.secondaryInk
+                                )
+                            }
+                        }
+                        CarePillButton(
+                            text = "Configure",
+                            backgroundColor = tokens.cardSurface,
+                            onClick = onOpenFallDetection,
+                            testTag = "sos_open_fall_detection"
                         )
                     }
                 }

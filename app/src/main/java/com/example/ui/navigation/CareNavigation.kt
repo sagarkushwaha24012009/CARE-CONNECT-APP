@@ -5,17 +5,27 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -26,7 +36,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,17 +43,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.R
@@ -62,12 +74,14 @@ import com.example.model.UiState
 import com.example.model.UserRole
 import com.example.notifications.ReminderChannels
 import com.example.notifications.ReminderScheduler
+import com.example.sensors.FallDetectionMonitor
 import com.example.ui.components.BottomNavTab
 import com.example.ui.components.CareBottomNavBar
 import com.example.ui.components.CareButton
 import com.example.ui.components.CareCard
 import com.example.ui.components.CareConfirmDialog
 import com.example.ui.components.CareNavigationRail
+import com.example.ui.components.CarePillButton
 import com.example.ui.components.CareTopBar
 import com.example.ui.components.OfflineSyncBanner
 import com.example.ui.screens.AiHealthTipsScreen
@@ -77,13 +91,17 @@ import com.example.ui.screens.ElderDetailsScreen
 import com.example.ui.screens.ElderHomeScreen
 import com.example.ui.screens.EldersListScreen
 import com.example.ui.screens.EmergencyContactsScreen
+import com.example.ui.screens.FallDetectionScreen
+import com.example.ui.screens.FallSosCountdownDialog
 import com.example.ui.screens.MedicineScreen
 import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.ProfileSettingsScreen
 import com.example.ui.screens.RoleSelectionAuthScreen
 import com.example.ui.screens.SosScreen
+import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.TasksScreen
+import com.example.ui.screens.VideoCallScreen
 import com.example.ui.screens.WaterTrackerScreen
 import com.example.ui.screens.launchDialerIntent
 import com.example.ui.theme.CareConnectTheme
@@ -109,9 +127,11 @@ fun CareConnectApp() {
 
     val credentialManager = remember(context) { CredentialManager.create(context) }
     var autoSignInChecked by remember { mutableStateOf(Firebase.auth.currentUser != null) }
-    var showOnboarding by remember(localPrefs.onboardingCompleted) {
-        mutableStateOf(!localPrefs.onboardingCompleted)
-    }
+    var viewingGuide by remember { mutableStateOf(false) }
+
+    val hashRouter = rememberHashRouterState(initialRoute = PrimaryHashRoute.SPLASH)
+    val targetPrimaryRoute by hashRouter.currentRoute.collectAsStateWithLifecycle()
+    val primaryNavController = rememberNavController()
 
     LaunchedEffect(Unit) {
         ReminderChannels.ensureChannels(context)
@@ -128,52 +148,158 @@ fun CareConnectApp() {
         }
     }
 
+    val resolvedPrimaryRoute = resolveTargetPrimaryHash(
+        isAuthResolved = autoSignInChecked,
+        isAuthenticated = authUser != null,
+        onboardingCompleted = localPrefs.onboardingCompleted,
+        activeRole = localPrefs.selectedRole,
+        viewingGuide = viewingGuide
+    )
+
+    LaunchedEffect(resolvedPrimaryRoute) {
+        val replaceCurrent = targetPrimaryRoute == PrimaryHashRoute.SPLASH ||
+            resolvedPrimaryRoute != PrimaryHashRoute.SPLASH ||
+            authUser != null
+        hashRouter.navigate(resolvedPrimaryRoute, replace = replaceCurrent)
+    }
+
+    LaunchedEffect(targetPrimaryRoute, authUser?.uid) {
+        val currentPrimaryRoute = primaryNavController.currentBackStackEntry?.destination?.route
+        if (currentPrimaryRoute != targetPrimaryRoute.navRoute) {
+            val switchingDashboards = (currentPrimaryRoute == PrimaryHashRoute.ELDER_DASHBOARD.navRoute ||
+                currentPrimaryRoute == PrimaryHashRoute.CARETAKER_DASHBOARD.navRoute) &&
+                (targetPrimaryRoute == PrimaryHashRoute.ELDER_DASHBOARD ||
+                    targetPrimaryRoute == PrimaryHashRoute.CARETAKER_DASHBOARD)
+            primaryNavController.navigate(targetPrimaryRoute.navRoute) {
+                when {
+                    switchingDashboards && currentPrimaryRoute != null -> {
+                        popUpTo(currentPrimaryRoute) { inclusive = true }
+                    }
+                    targetPrimaryRoute == PrimaryHashRoute.SPLASH &&
+                        currentPrimaryRoute == PrimaryHashRoute.AUTH.navRoute -> {
+                        // Keep Auth below Guide so Back returns to Auth cleanly
+                    }
+                    else -> {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+                launchSingleTop = true
+            }
+        }
+    }
+
     CareConnectTheme(
         themePreset = localPrefs.themePreset,
         darkMode = localPrefs.darkMode,
         textScale = localPrefs.textScale
     ) {
-        val currentUser = authUser
-        if (currentUser == null) {
-            if (!autoSignInChecked) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(LocalCareColors.current.background),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = LocalCareColors.current.ink)
-                }
-            } else if (showOnboarding) {
-                OnboardingScreen(
-                    onContinue = {
-                        showOnboarding = false
-                        scope.launch { prefsDataStore.setOnboardingCompleted(true) }
+        NavHost(
+            navController = primaryNavController,
+            startDestination = PrimaryHashRoute.SPLASH.navRoute,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            composable(PrimaryHashRoute.SPLASH.navRoute) {
+                val showOnboardingSteps = autoSignInChecked &&
+                    authUser == null &&
+                    (!localPrefs.onboardingCompleted || viewingGuide)
+
+                if (showOnboardingSteps) {
+                    BackHandler(enabled = viewingGuide) {
+                        viewingGuide = false
+                        hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
                     }
-                )
-            } else {
+                    OnboardingScreen(
+                        onContinue = {
+                            viewingGuide = false
+                            scope.launch { prefsDataStore.setOnboardingCompleted(true) }
+                            hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
+                        }
+                    )
+                } else {
+                    SplashScreen(
+                        statusMessage = if (authUser != null) {
+                            "Opening Care Connect..."
+                        } else {
+                            "Checking your family care session..."
+                        }
+                    )
+                }
+            }
+
+            composable(PrimaryHashRoute.AUTH.navRoute) {
                 RoleSelectionAuthScreen(
                     selectedRole = localPrefs.selectedRole,
                     onSelectRole = { role ->
                         scope.launch { prefsDataStore.setSelectedRole(role) }
                     },
                     onAuthSuccess = { role ->
+                        viewingGuide = false
                         scope.launch {
                             prefsDataStore.setOnboardingCompleted(true)
                             prefsDataStore.setSelectedRole(role)
                         }
+                        hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
                     },
-                    onBackToOnboarding = { showOnboarding = true }
+                    onBackToOnboarding = {
+                        viewingGuide = true
+                        hashRouter.navigate(PrimaryHashRoute.SPLASH)
+                    }
                 )
             }
-        } else {
-            key(currentUser.uid) {
-                AuthenticatedCareWorkspace(
-                    user = currentUser,
-                    prefsDataStore = prefsDataStore,
-                    localPrefs = localPrefs,
-                    credentialManager = credentialManager
-                )
+
+            navigation(
+                route = PrimaryHashRoute.WORKSPACE_GRAPH_ROUTE,
+                startDestination = PrimaryHashRoute.ELDER_DASHBOARD.navRoute
+            ) {
+                composable(PrimaryHashRoute.ELDER_DASHBOARD.navRoute) { backStackEntry ->
+                    val currentUser = authUser
+                    if (currentUser == null) {
+                        SplashScreen(statusMessage = "Signing out...")
+                    } else {
+                        val workspaceStoreOwner = remember(backStackEntry) {
+                            primaryNavController.getBackStackEntry(PrimaryHashRoute.WORKSPACE_GRAPH_ROUTE)
+                        }
+                        AuthenticatedCareWorkspace(
+                            user = currentUser,
+                            workspaceRole = UserRole.ELDER,
+                            workspaceStoreOwner = workspaceStoreOwner,
+                            prefsDataStore = prefsDataStore,
+                            localPrefs = localPrefs,
+                            credentialManager = credentialManager,
+                            onSwitchPrimaryRole = { role ->
+                                hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
+                            },
+                            onSignedOut = {
+                                hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
+                            }
+                        )
+                    }
+                }
+
+                composable(PrimaryHashRoute.CARETAKER_DASHBOARD.navRoute) { backStackEntry ->
+                    val currentUser = authUser
+                    if (currentUser == null) {
+                        SplashScreen(statusMessage = "Signing out...")
+                    } else {
+                        val workspaceStoreOwner = remember(backStackEntry) {
+                            primaryNavController.getBackStackEntry(PrimaryHashRoute.WORKSPACE_GRAPH_ROUTE)
+                        }
+                        AuthenticatedCareWorkspace(
+                            user = currentUser,
+                            workspaceRole = UserRole.CARETAKER,
+                            workspaceStoreOwner = workspaceStoreOwner,
+                            prefsDataStore = prefsDataStore,
+                            localPrefs = localPrefs,
+                            credentialManager = credentialManager,
+                            onSwitchPrimaryRole = { role ->
+                                hashRouter.navigate(PrimaryHashRoute.forRole(role), replace = true)
+                            },
+                            onSignedOut = {
+                                hashRouter.navigate(PrimaryHashRoute.AUTH, replace = true)
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -182,15 +308,20 @@ fun CareConnectApp() {
 @Composable
 private fun AuthenticatedCareWorkspace(
     user: FirebaseUser,
+    workspaceRole: UserRole,
+    workspaceStoreOwner: ViewModelStoreOwner,
     prefsDataStore: UserPrefsDataStore,
     localPrefs: LocalAppPreferences,
-    credentialManager: CredentialManager
+    credentialManager: CredentialManager,
+    onSwitchPrimaryRole: (UserRole) -> Unit,
+    onSignedOut: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tokens = LocalCareColors.current
 
     val viewModel: CareViewModel = viewModel(
+        viewModelStoreOwner = workspaceStoreOwner,
         key = "care_vm_${user.uid}",
         factory = remember(user.uid) {
             object : ViewModelProvider.Factory {
@@ -202,6 +333,7 @@ private fun AuthenticatedCareWorkspace(
                         aiRepository = AiWellnessRepository(),
                         reminderScheduler = ReminderScheduler(context),
                         locationHelper = LocationHelper(context),
+                        fallDetectionMonitor = FallDetectionMonitor(context),
                         currentUserId = user.uid
                     ) as T
                 }
@@ -214,10 +346,13 @@ private fun AuthenticatedCareWorkspace(
     val aiTipsState by viewModel.aiTipsState.collectAsStateWithLifecycle()
     val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
     val feedbackMessage by viewModel.feedbackMessage.collectAsStateWithLifecycle()
+    val fallTelemetry by viewModel.fallTelemetry.collectAsStateWithLifecycle()
+    val fallCountdownSeconds by viewModel.fallCountdownSeconds.collectAsStateWithLifecycle()
+    val pendingFallAlert by viewModel.pendingFallAlert.collectAsStateWithLifecycle()
 
     // Ensure initial Firestore user/elder profile exists once signed in
     LaunchedEffect(user.uid) {
-        viewModel.ensureProfileInitialized(role = localPrefs.selectedRole)
+        viewModel.ensureProfileInitialized(role = workspaceRole)
     }
 
     // Monitor network connectivity for offline-tolerant sync
@@ -257,9 +392,19 @@ private fun AuthenticatedCareWorkspace(
     var noContactSosAlertElder by remember { mutableStateOf<ElderProfile?>(null) }
 
     val data = (dashboardState as? UiState.Success<CareDashboardData>)?.data
-    val activeRole = remember(data?.userProfile?.role, localPrefs.selectedRole) {
-        data?.userProfile?.role?.let { UserRole.fromWire(it) } ?: localPrefs.selectedRole
+    var initialFirestoreRoleSynced by remember(user.uid) { mutableStateOf(false) }
+    LaunchedEffect(user.uid, data?.userProfile?.role) {
+        val rawRole = data?.userProfile?.role ?: return@LaunchedEffect
+        if (!initialFirestoreRoleSynced) {
+            initialFirestoreRoleSynced = true
+            val resolved = UserRole.fromWire(rawRole)
+            if (resolved != workspaceRole) {
+                prefsDataStore.setSelectedRole(resolved)
+                onSwitchPrimaryRole(resolved)
+            }
+        }
     }
+    val activeRole = workspaceRole
     val unreadCount = data?.notifications?.count { it.readStatus != "read" } ?: 0
     val pendingSyncCount = data?.pendingSyncOps?.size ?: 0
     val todayKey = remember { viewModel.todayDateKey() }
@@ -332,6 +477,69 @@ private fun AuthenticatedCareWorkspace(
                         pendingCount = pendingSyncCount,
                         onSyncClick = { viewModel.syncPendingChanges() }
                     )
+
+                    val incomingCall = data?.videoCalls?.firstOrNull {
+                        it.callStatus == "ringing" && it.callerUid != user.uid
+                    }
+                    if (incomingCall != null) {
+                        CareCard(
+                            backgroundColor = tokens.mintGreen,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .testTag("incoming_video_call_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Videocam,
+                                        contentDescription = "Incoming video call",
+                                        tint = tokens.ink,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Incoming Video Call",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = tokens.ink
+                                        )
+                                        Text(
+                                            text = "${incomingCall.callerName} • ${incomingCall.elderName}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = tokens.secondaryInk
+                                        )
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    CarePillButton(
+                                        text = "Answer",
+                                        icon = Icons.Filled.Call,
+                                        backgroundColor = tokens.butterYellow,
+                                        onClick = {
+                                            viewModel.answerVideoCall(incomingCall)
+                                            openElderRoute("video_call", incomingCall.elderId)
+                                        },
+                                        testTag = "incoming_call_answer_button"
+                                    )
+                                    CarePillButton(
+                                        text = "Decline",
+                                        icon = Icons.Filled.CallEnd,
+                                        backgroundColor = tokens.sosCoral,
+                                        onClick = { viewModel.declineVideoCall(incomingCall) },
+                                        testTag = "incoming_call_decline_button"
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     when (val state = dashboardState) {
                         is UiState.Loading -> {
@@ -415,11 +623,14 @@ private fun AuthenticatedCareWorkspace(
                                                 }
                                             },
                                             onOpenSosDetail = { openElderRoute("sos", it) },
+                                            onCallVideoElder = { openElderRoute("video_call", it) },
                                             onQuickActionMedicine = { openElderRoute("medicines", it) },
                                             onQuickActionWater = { openElderRoute("water", it) },
                                             onQuickActionTasks = { openElderRoute("tasks", it) },
                                             onQuickActionContacts = { openElderRoute("contacts", it) },
-                                            onQuickActionAppointments = { openElderRoute("appointments", it) }
+                                            onQuickActionAppointments = { openElderRoute("appointments", it) },
+                                            onQuickActionVideoCall = { openElderRoute("video_call", it) },
+                                            onQuickActionFallDetection = { openElderRoute("fall_detection", it) }
                                         )
                                     } else {
                                         val elder = ownElder ?: ElderProfile(
@@ -442,6 +653,7 @@ private fun AuthenticatedCareWorkspace(
                                             tasks = elderTasks,
                                             contacts = elderContacts,
                                             activeSos = elderSos,
+                                            fallDetectionEnabled = localPrefs.fallDetectionEnabled,
                                             onMarkMedicineTaken = { med -> viewModel.logMedicineStatus(med, "taken") },
                                             onAddWater = {
                                                 val current = elderWater?.glasses ?: 0
@@ -454,6 +666,8 @@ private fun AuthenticatedCareWorkspace(
                                             onOpenContacts = { openElderRoute("contacts", elder.elderId) },
                                             onOpenAiTips = { openElderRoute("ai_tips", elder.elderId) },
                                             onOpenSos = { openElderRoute("sos", elder.elderId) },
+                                            onOpenVideoCall = { openElderRoute("video_call", elder.elderId) },
+                                            onOpenFallDetection = { openElderRoute("fall_detection", elder.elderId) },
                                             onOpenLocationControls = { openElderRoute("sos", elder.elderId) }
                                         )
                                     }
@@ -483,6 +697,8 @@ private fun AuthenticatedCareWorkspace(
                                         onOpenTasks = { openElderRoute("tasks", it) },
                                         onOpenContacts = { openElderRoute("contacts", it) },
                                         onOpenAppointments = { openElderRoute("appointments", it) },
+                                        onOpenVideoCall = { openElderRoute("video_call", it) },
+                                        onOpenFallDetection = { openElderRoute("fall_detection", it) },
                                         onOpenPairingSettings = { navigateTopTab(BottomNavTab.SETTINGS.route) }
                                     )
                                 }
@@ -507,7 +723,10 @@ private fun AuthenticatedCareWorkspace(
                                         isOnline = isOnline,
                                         pendingSyncCount = pendingSyncCount,
                                         onUpdateDisplayName = { viewModel.updateDisplayName(it) },
-                                        onSwitchRole = { viewModel.switchRole(it) },
+                                        onSwitchRole = { targetRole ->
+                                            viewModel.switchRole(targetRole)
+                                            onSwitchPrimaryRole(targetRole)
+                                        },
                                         onGeneratePairingCode = { viewModel.generatePairingCode(it) },
                                         onRevokePairingCode = { viewModel.revokePairingCode(it) },
                                         onClaimPairingCode = { code ->
@@ -521,9 +740,14 @@ private fun AuthenticatedCareWorkspace(
                                         onToggleReminders = { viewModel.updateRemindersEnabled(it) },
                                         onToggleLocationSharing = { elder, enable -> viewModel.toggleLocationSharing(elder, enable) },
                                         onRefreshLocation = { viewModel.refreshLocationNow(it) },
+                                        onOpenFallDetection = {
+                                            val targetId = ownElder?.elderId ?: selectedElderId ?: user.uid
+                                            openElderRoute("fall_detection", targetId)
+                                        },
                                         onSyncNow = { viewModel.syncPendingChanges() },
                                         onSignOut = {
                                             signOutUser(credentialManager = credentialManager, scope = scope)
+                                            onSignedOut()
                                         }
                                     )
                                 }
@@ -553,6 +777,8 @@ private fun AuthenticatedCareWorkspace(
                                         onOpenContacts = { openElderRoute("contacts", elderId) },
                                         onOpenAppointments = { openElderRoute("appointments", elderId) },
                                         onOpenSos = { openElderRoute("sos", elderId) },
+                                        onOpenVideoCall = { openElderRoute("video_call", elderId) },
+                                        onOpenFallDetection = { openElderRoute("fall_detection", elderId) },
                                         onRevokeCaretakerLink = { viewModel.revokeCaretakerLink(it) }
                                     )
                                 }
@@ -662,7 +888,56 @@ private fun AuthenticatedCareWorkspace(
                                         onToggleLocationSharing = { target, enable ->
                                             viewModel.toggleLocationSharing(target, enable)
                                         },
-                                        onRefreshLocation = { viewModel.refreshLocationNow(it) }
+                                        onRefreshLocation = { viewModel.refreshLocationNow(it) },
+                                        onOpenFallDetection = { openElderRoute("fall_detection", elderId) }
+                                    )
+                                }
+
+                                composable(
+                                    route = "video_call/{elderId}",
+                                    arguments = listOf(navArgument("elderId") { type = NavType.StringType })
+                                ) { entry ->
+                                    val elderId = Uri.decode(entry.arguments?.getString("elderId").orEmpty())
+                                    val elder = elders.firstOrNull { it.elderId == elderId }
+                                    val callerName = d.userProfile?.displayName?.ifBlank { user.displayName } ?: "Family Member"
+                                    VideoCallScreen(
+                                        elder = elder,
+                                        currentUserUid = user.uid,
+                                        currentUserName = callerName,
+                                        userRole = activeRole,
+                                        caretakerLinks = d.caretakerLinks.filter { it.elderId == elderId },
+                                        calls = d.videoCalls.filter { it.elderId == elderId },
+                                        onBack = { navController.popBackStack() },
+                                        onStartCall = { targetElder, name, role ->
+                                            viewModel.startVideoCall(targetElder, name, role)
+                                        },
+                                        onAnswerCall = { viewModel.answerVideoCall(it) },
+                                        onDeclineCall = { viewModel.declineVideoCall(it) },
+                                        onEndCall = { viewModel.endVideoCall(it) },
+                                        onToggleCamera = { call, enabled -> viewModel.toggleCallCamera(call, enabled) },
+                                        onToggleMic = { call, muted -> viewModel.toggleCallMic(call, muted) }
+                                    )
+                                }
+
+                                composable(
+                                    route = "fall_detection/{elderId}",
+                                    arguments = listOf(navArgument("elderId") { type = NavType.StringType })
+                                ) { entry ->
+                                    val elderId = Uri.decode(entry.arguments?.getString("elderId").orEmpty())
+                                    val elder = elders.firstOrNull { it.elderId == elderId }
+                                    FallDetectionScreen(
+                                        elder = elder,
+                                        fallDetectionEnabled = localPrefs.fallDetectionEnabled,
+                                        sensitivity = localPrefs.fallSensitivity,
+                                        telemetry = fallTelemetry,
+                                        fallSosEvents = d.sosEvents.filter {
+                                            it.elderId == elderId && it.source != "manual"
+                                        },
+                                        onBack = { navController.popBackStack() },
+                                        onToggleEnabled = { enable -> viewModel.toggleFallDetection(elder, enable) },
+                                        onSelectSensitivity = { viewModel.updateFallSensitivity(it) },
+                                        onSimulateFall = { viewModel.triggerFallSimulation() },
+                                        onOpenSosScreen = { openElderRoute("sos", elderId) }
                                     )
                                 }
 
@@ -692,6 +967,26 @@ private fun AuthenticatedCareWorkspace(
                 }
             }
         }
+    }
+
+    val activeFallCountdown = fallCountdownSeconds
+    val activeFallAlert = pendingFallAlert
+    if (activeFallCountdown != null && activeFallAlert != null) {
+        val targetElder = data?.elderProfiles?.firstOrNull { it.elderId == user.uid }
+            ?: data?.elderProfiles?.firstOrNull { it.elderId == selectedElderId }
+            ?: data?.elderProfiles?.firstOrNull()
+        FallSosCountdownDialog(
+            secondsLeft = activeFallCountdown,
+            alert = activeFallAlert,
+            onCancelSafe = { viewModel.cancelFallCountdown() },
+            onSendSosNow = {
+                if (targetElder != null) {
+                    viewModel.confirmFallSosNow(targetElder)
+                } else {
+                    viewModel.cancelFallCountdown()
+                }
+            }
+        )
     }
 
     contactToDialFromSos?.let { contact ->

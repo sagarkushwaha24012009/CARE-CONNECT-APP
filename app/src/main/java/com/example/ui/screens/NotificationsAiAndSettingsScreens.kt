@@ -46,7 +46,9 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -156,23 +158,40 @@ fun NotificationsScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    "all" to "All",
-                    "sos" to "SOS",
-                    "medicine" to "Meds",
-                    "task" to "Tasks",
-                    "appointment" to "Visits"
-                ).forEach { (key, label) ->
-                    CarePillButton(
-                        text = label,
-                        backgroundColor = if (selectedCategory == key) tokens.skyBlue else tokens.cardSurface,
-                        onClick = { selectedCategory = key },
-                        modifier = Modifier.weight(1f)
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "all" to "All",
+                        "sos" to "SOS",
+                        "call" to "Calls"
+                    ).forEach { (key, label) ->
+                        CarePillButton(
+                            text = label,
+                            backgroundColor = if (selectedCategory == key) tokens.skyBlue else tokens.cardSurface,
+                            onClick = { selectedCategory = key },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "medicine" to "Meds",
+                        "task" to "Tasks",
+                        "appointment" to "Visits"
+                    ).forEach { (key, label) ->
+                        CarePillButton(
+                            text = label,
+                            backgroundColor = if (selectedCategory == key) tokens.skyBlue else tokens.cardSurface,
+                            onClick = { selectedCategory = key },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 
@@ -185,7 +204,7 @@ fun NotificationsScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Medicine logs, task updates, appointments, and SOS alerts appear here in real time.",
+                        text = "Medicine logs, task updates, video calls, appointments, and SOS alerts appear here in real time.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = tokens.secondaryInk
                     )
@@ -195,6 +214,7 @@ fun NotificationsScreen(
                     val unread = notif.readStatus != "read"
                     val categoryColor = when (notif.category) {
                         "sos" -> tokens.sosCoral
+                        "call" -> tokens.mintGreen
                         "medicine" -> tokens.softPink
                         "task" -> tokens.butterYellow
                         "appointment" -> tokens.skyBlue
@@ -202,6 +222,7 @@ fun NotificationsScreen(
                     }
                     val categoryIcon = when (notif.category) {
                         "sos" -> Icons.Filled.NotificationsActive
+                        "call" -> Icons.Filled.Videocam
                         "medicine" -> Icons.Filled.Medication
                         "task" -> Icons.Filled.Checklist
                         "appointment" -> Icons.Filled.CalendarMonth
@@ -448,6 +469,7 @@ fun ProfileSettingsScreen(
     onToggleReminders: (Boolean) -> Unit,
     onToggleLocationSharing: (ElderProfile, Boolean) -> Unit,
     onRefreshLocation: (ElderProfile) -> Unit,
+    onOpenFallDetection: () -> Unit = {},
     onSyncNow: () -> Unit,
     onSignOut: () -> Unit
 ) {
@@ -810,6 +832,33 @@ fun ProfileSettingsScreen(
                             onClick = { onRefreshLocation(ownElderProfile) }
                         )
                     }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Fall Detection & Sensitivity", style = MaterialTheme.typography.titleMedium, color = tokens.ink)
+                        Text(
+                            text = if (prefs.fallDetectionEnabled) {
+                                "Active • ${prefs.fallSensitivity.label} sensitivity"
+                            } else {
+                                "Paused • Tap to configure or simulate"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = tokens.secondaryInk
+                        )
+                    }
+                    CarePillButton(
+                        text = "Configure",
+                        icon = Icons.Filled.Sensors,
+                        backgroundColor = tokens.cardSurface,
+                        onClick = onOpenFallDetection,
+                        testTag = "settings_fall_detection_button"
+                    )
                 }
             }
 

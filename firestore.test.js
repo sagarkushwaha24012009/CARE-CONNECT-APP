@@ -363,3 +363,100 @@ test("Medicine, water, tasks, contacts, appointments, notifications, and SOS wor
       .get()
   );
 });
+
+test("Video calls and fall-detection SOS workflows enforce member authorization", async () => {
+  const elderDb = testEnv.authenticatedContext(ELDER_UID).firestore();
+  const caretakerDb = testEnv.authenticatedContext(CARETAKER_UID).firestore();
+  const strangerDb = testEnv.authenticatedContext(STRANGER_UID).firestore();
+  const created = pastDate(8000);
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("elder_profiles").doc(ELDER_UID).set({
+      elderId: ELDER_UID,
+      displayName: "Grandpa Arthur",
+      dailyWaterGoal: 8,
+      locationSharingEnabled: true,
+      onlineStatus: "online",
+      avatarKey: "grandpa",
+      fallDetectionEnabled: true,
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      createdAt: created,
+      updatedAt: created,
+    });
+  });
+
+  // Linked caretaker initiates video call to elder
+  await assertSucceeds(
+    caretakerDb.collection("video_calls").doc("call_01").set({
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      callerUid: CARETAKER_UID,
+      callerName: "Sarah",
+      callerRole: "caretaker",
+      roomCode: "CARE9482ABCD",
+      callStatus: "ringing",
+      callerCameraEnabled: true,
+      calleeCameraEnabled: true,
+      callerMicMuted: false,
+      calleeMicMuted: false,
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Elder answers and toggles camera/mic, then ends call
+  await assertSucceeds(
+    elderDb.collection("video_calls").doc("call_01").update({
+      callStatus: "active",
+      calleeCameraEnabled: true,
+      updatedAt: pastDate(3000),
+    })
+  );
+  await assertSucceeds(
+    elderDb.collection("video_calls").doc("call_01").update({
+      callStatus: "ended",
+      updatedAt: pastDate(1000),
+    })
+  );
+
+  // Stranger cannot read, list, create, or update video_calls
+  await assertFails(strangerDb.collection("video_calls").doc("call_01").get());
+  await assertFails(
+    strangerDb.collection("video_calls").doc("call_bad").set({
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      callerUid: STRANGER_UID,
+      callerName: "Stranger",
+      callerRole: "caretaker",
+      roomCode: "HACK12345678",
+      callStatus: "ringing",
+      callerCameraEnabled: true,
+      calleeCameraEnabled: true,
+      callerMicMuted: false,
+      calleeMicMuted: false,
+      authorizedUids: [ELDER_UID, STRANGER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Fall detection triggers SOS event with source + peakGForce
+  await assertSucceeds(
+    elderDb.collection("sos_events").doc("sos_fall_01").set({
+      elderId: ELDER_UID,
+      elderName: "Grandpa Arthur",
+      status: "active",
+      areaLabel: "Near Oak Street",
+      latitude: 37.422,
+      longitude: -122.084,
+      deliveryState: "delivered",
+      source: "fall_detection",
+      peakGForce: 3.15,
+      authorizedUids: [ELDER_UID, CARETAKER_UID],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+});
+

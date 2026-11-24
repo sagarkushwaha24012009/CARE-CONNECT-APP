@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -82,11 +84,14 @@ fun CaretakerDashboardScreen(
     onCreateManagedElder: (name: String, avatarKey: String, waterGoal: Int, ageLabel: String?) -> Unit,
     onCallSosElder: (SosEvent) -> Unit,
     onOpenSosDetail: (String) -> Unit,
+    onCallVideoElder: (String) -> Unit = {},
     onQuickActionMedicine: (String) -> Unit,
     onQuickActionWater: (String) -> Unit,
     onQuickActionTasks: (String) -> Unit,
     onQuickActionContacts: (String) -> Unit,
-    onQuickActionAppointments: (String) -> Unit
+    onQuickActionAppointments: (String) -> Unit,
+    onQuickActionVideoCall: (String) -> Unit = {},
+    onQuickActionFallDetection: (String) -> Unit = {}
 ) {
     val tokens = LocalCareColors.current
     var showAddElderDialog by remember { mutableStateOf(false) }
@@ -127,11 +132,23 @@ fun CaretakerDashboardScreen(
                         )
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "SOS Alert",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = tokens.ink
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "SOS Alert",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = tokens.ink
+                                )
+                                if (primarySos.source != "manual") {
+                                    CareStatusBadge(
+                                        label = if (primarySos.source == "fall_simulation") "Safety Sim" else "Fall Detected",
+                                        backgroundColor = tokens.butterYellow,
+                                        icon = Icons.Filled.Sensors
+                                    )
+                                }
+                            }
                             Text(
                                 text = "${primarySos.elderName} needs help!",
                                 style = MaterialTheme.typography.titleMedium,
@@ -327,20 +344,43 @@ fun CaretakerDashboardScreen(
                                 }
                             }
                             Spacer(Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = tokens.butterYellow,
-                                border = BorderStroke(2.dp, tokens.border),
-                                modifier = Modifier.size(48.dp),
-                                onClick = { onOpenElderDetails(elder.elderId) }
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalAlignment = Alignment.End
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                        contentDescription = "View ${elder.displayName} details",
-                                        tint = tokens.ink,
-                                        modifier = Modifier.size(28.dp)
-                                    )
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = tokens.skyBlue,
+                                    border = BorderStroke(2.dp, tokens.border),
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("caretaker_elder_video_${elder.elderId}"),
+                                    onClick = { onCallVideoElder(elder.elderId) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Videocam,
+                                            contentDescription = "Video call ${elder.displayName}",
+                                            tint = tokens.ink,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = tokens.butterYellow,
+                                    border = BorderStroke(2.dp, tokens.border),
+                                    modifier = Modifier.size(48.dp),
+                                    onClick = { onOpenElderDetails(elder.elderId) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = "View ${elder.displayName} details",
+                                            tint = tokens.ink,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -449,6 +489,29 @@ fun CaretakerDashboardScreen(
                             tint = tokens.ink
                         )
                     }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    QuickActionTile(
+                        label = "Video Call",
+                        icon = Icons.Filled.Videocam,
+                        backgroundColor = tokens.mintGreen,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("quick_action_video_call"),
+                        onClick = { onQuickActionVideoCall(primaryElder.elderId) }
+                    )
+                    QuickActionTile(
+                        label = "Fall Monitor",
+                        icon = Icons.Filled.Sensors,
+                        backgroundColor = tokens.butterYellow,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("quick_action_fall_detection"),
+                        onClick = { onQuickActionFallDetection(primaryElder.elderId) }
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))

@@ -33,6 +33,7 @@
         "lastLocationAt": { "type": "string", "format": "date-time" },
         "ageLabel": { "type": "string" },
         "notes": { "type": "string" },
+        "fallDetectionEnabled": { "type": "boolean" },
         "authorizedUids": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -180,7 +181,7 @@
       "type": "object",
       "properties": {
         "elderId": { "type": "string" },
-        "category": { "type": "string", "enum": ["medicine", "task", "appointment", "sos", "system"] },
+        "category": { "type": "string", "enum": ["medicine", "task", "appointment", "sos", "call", "system"] },
         "title": { "type": "string" },
         "body": { "type": "string" },
         "readStatus": { "type": "string", "enum": ["unread", "read"] },
@@ -192,7 +193,7 @@
     },
     "SosEvent": {
       "title": "SosEvent",
-      "description": "Emergency SOS event triggered by an elder and visible to linked caretakers.",
+      "description": "Emergency SOS event triggered by an elder or fall detection sensor and visible to linked caretakers.",
       "type": "object",
       "properties": {
         "elderId": { "type": "string" },
@@ -203,11 +204,35 @@
         "longitude": { "type": "number" },
         "deliveryState": { "type": "string", "enum": ["delivered", "acknowledged", "cancelled"] },
         "acknowledgedByUid": { "type": "string" },
+        "source": { "type": "string", "enum": ["manual", "fall_detection", "fall_simulation"] },
+        "peakGForce": { "type": "number" },
         "authorizedUids": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["elderId", "elderName", "status", "areaLabel", "deliveryState", "authorizedUids", "createdAt", "updatedAt"]
+    },
+    "VideoCallSession": {
+      "title": "VideoCallSession",
+      "description": "Authorized video call signaling and session state between an elder and linked caretakers.",
+      "type": "object",
+      "properties": {
+        "elderId": { "type": "string" },
+        "elderName": { "type": "string" },
+        "callerUid": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerRole": { "type": "string", "enum": ["elder", "caretaker"] },
+        "roomCode": { "type": "string" },
+        "callStatus": { "type": "string", "enum": ["ringing", "active", "ended", "declined"] },
+        "callerCameraEnabled": { "type": "boolean" },
+        "calleeCameraEnabled": { "type": "boolean" },
+        "callerMicMuted": { "type": "boolean" },
+        "calleeMicMuted": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["elderId", "elderName", "callerUid", "callerName", "callerRole", "roomCode", "callStatus", "callerCameraEnabled", "calleeCameraEnabled", "callerMicMuted", "calleeMicMuted", "authorizedUids", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -258,6 +283,10 @@
     "/sos_events/{eventId}": {
       "schema": { "$ref": "#/entities/SosEvent" },
       "description": "SOS emergency events and acknowledgment states."
+    },
+    "/video_calls/{callId}": {
+      "schema": { "$ref": "#/entities/VideoCallSession" },
+      "description": "Authorized video calls between elders and linked caretakers."
     }
   }
 }

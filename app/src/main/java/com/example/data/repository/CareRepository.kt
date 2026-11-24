@@ -21,6 +21,7 @@ import com.example.model.PairingInvite
 import com.example.model.SosEvent
 import com.example.model.UserProfile
 import com.example.model.UserRole
+import com.example.model.VideoCallSession
 import com.example.model.WaterLog
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -169,6 +170,9 @@ class CareRepository(
 
     fun observeSosEvents(uid: String): Flow<List<SosEvent>> =
         observeAuthorizedCollection("sos_events", uid)
+
+    fun observeVideoCalls(uid: String): Flow<List<VideoCallSession>> =
+        observeAuthorizedCollection("video_calls", uid)
 
     fun observePairingInvites(elderUid: String): Flow<List<PairingInvite>> = flow {
         val current = auth.currentUser?.uid
@@ -386,7 +390,8 @@ class CareRepository(
         dailyWaterGoal: Int? = null,
         locationSharingEnabled: Boolean? = null,
         lastKnownArea: String? = null,
-        updateLocationTimestamp: Boolean = false
+        updateLocationTimestamp: Boolean = false,
+        fallDetectionEnabled: Boolean? = null
     ): Result<WriteOutcome> {
         val uid = try {
             requireUserId()
@@ -402,6 +407,7 @@ class CareRepository(
         if (locationSharingEnabled != null) updates["locationSharingEnabled"] = locationSharingEnabled
         if (!lastKnownArea.isNullOrBlank()) updates["lastKnownArea"] = lastKnownArea.trim().take(120)
         if (updateLocationTimestamp) updates["lastLocationAt"] = FieldValue.serverTimestamp()
+        if (fallDetectionEnabled != null) updates["fallDetectionEnabled"] = fallDetectionEnabled
 
         return executeUpdateWithOfflineQueue(
             uid = uid,
@@ -539,7 +545,8 @@ class CareRepository(
             "emergency_contacts",
             "appointments",
             "notifications",
-            "sos_events"
+            "sos_events",
+            "video_calls"
         )
         for (col in collections) {
             try {
@@ -1071,7 +1078,9 @@ class CareRepository(
         elder: ElderProfile,
         areaLabel: String,
         latitude: Double?,
-        longitude: Double?
+        longitude: Double?,
+        source: String = "manual",
+        peakGForce: Double? = null
     ): Result<WriteOutcome> {
         val uid = try {
             requireUserId()
@@ -1080,6 +1089,10 @@ class CareRepository(
         }
         val eventId = newDocId("sos")
         val safeAuth = (elder.authorizedUids + elder.elderId + uid).distinct().take(10)
+        val safeSource = when (source) {
+            "fall_detection", "fall_simulation" -> source
+            else -> "manual"
+        }
         val payload = mapOf(
             "elderId" to elder.elderId,
             "elderName" to elder.displayName.take(60),
@@ -1088,6 +1101,8 @@ class CareRepository(
             "latitude" to latitude,
             "longitude" to longitude,
             "deliveryState" to "delivered",
+            "source" to safeSource,
+            "peakGForce" to peakGForce?.coerceIn(0.0, 50.0),
             "authorizedUids" to safeAuth,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
@@ -1095,15 +1110,117 @@ class CareRepository(
 
         val res = executeSetWithOfflineQueue(uid, "sos_events", eventId, payload)
         if (res.isSuccess) {
+            val title = when (safeSource) {
+                "fall_detection" -> "Fall Detected SOS: ${elder.displayName}"
+                "fall_simulation" -> "Simulated Fall SOS: ${elder.displayName}"
+                else -> "SOS Alert: ${elder.displayName}"
+            }
+            val impactSuffix = peakGForce?.let { " • Impact ${String.format(Locale.US, "%.1f", it)}G" }.orEmpty()
             createNotification(
                 elderId = elder.elderId,
                 authorizedUids = safeAuth,
                 category = "sos",
-                title = "SOS Alert: ${elder.displayName}",
-                body = "Emergency alert triggered (${areaLabel.take(60)})."
+                title = title,
+                body = "Emergency alert triggered (${areaLabel.take(60)})$impactSuffix."
             )
         }
         return res
+    }
+
+    suspend fun startVideoCall(
+        elder: ElderProfile,
+        callerName: String,
+        callerRole: UserRole
+    ): Result<VideoCallSession> {
+        val uid = try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        val callId = newDocId("call")
+        val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val roomCode = (1..10).map { chars.random() }.joinToString("")
+        val safeCallerName = callerName.trim().ifEmpty { callerRole.displayLabel }.take(60)
+        val safeAuth = (elder.authorizedUids + elder.elderId + uid).distinct().take(10)
+
+        val payload = mapOf<String, Any>(
+            "elderId" to elder.elderId,
+            "elderName" to elder.displayName.take(60),
+            "callerUid" to uid,
+            "callerName" to safeCallerName,
+            "callerRole" to callerRole.wire,
+            "roomCode" to roomCode,
+            "callStatus" to "ringing",
+            "callerCameraEnabled" to true,
+            "calleeCameraEnabled" to true,
+            "callerMicMuted" to false,
+            "calleeMicMuted" to false,
+            "authorizedUids" to safeAuth,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        return try {
+            db.collection("video_calls").document(callId).set(payload).await()
+            createNotification(
+                elderId = elder.elderId,
+                authorizedUids = safeAuth,
+                category = "call",
+                title = "Video Call: $safeCallerName",
+                body = "$safeCallerName started a secure Care Connect video call (${elder.displayName})."
+            )
+            Result.success(
+                VideoCallSession(
+                    id = callId,
+                    elderId = elder.elderId,
+                    elderName = elder.displayName.take(60),
+                    callerUid = uid,
+                    callerName = safeCallerName,
+                    callerRole = callerRole.wire,
+                    roomCode = roomCode,
+                    callStatus = "ringing",
+                    callerCameraEnabled = true,
+                    calleeCameraEnabled = true,
+                    callerMicMuted = false,
+                    calleeMicMuted = false,
+                    authorizedUids = safeAuth
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, "video_calls/$callId")
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateVideoCallState(
+        callId: String,
+        callStatus: String? = null,
+        callerCameraEnabled: Boolean? = null,
+        calleeCameraEnabled: Boolean? = null,
+        callerMicMuted: Boolean? = null,
+        calleeMicMuted: Boolean? = null
+    ): Result<Unit> {
+        return try {
+            requireUserId()
+            val updates = mutableMapOf<String, Any>(
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (callStatus != null) updates["callStatus"] = callStatus
+            if (callerCameraEnabled != null) updates["callerCameraEnabled"] = callerCameraEnabled
+            if (calleeCameraEnabled != null) updates["calleeCameraEnabled"] = calleeCameraEnabled
+            if (callerMicMuted != null) updates["callerMicMuted"] = callerMicMuted
+            if (calleeMicMuted != null) updates["calleeMicMuted"] = calleeMicMuted
+
+            db.collection("video_calls").document(callId).update(updates).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, "video_calls/$callId")
+            Result.failure(e)
+        }
     }
 
     suspend fun acknowledgeSos(eventId: String): Result<WriteOutcome> {
