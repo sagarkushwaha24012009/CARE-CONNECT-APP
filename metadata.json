@@ -1,0 +1,6 @@
+{
+  "name": "Care Connect",
+  "description": "A family-supported elder-care Android app connecting older adults with authorized caretakers for medicine reminders, hydration, tasks, AI wellness tips, and SOS alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

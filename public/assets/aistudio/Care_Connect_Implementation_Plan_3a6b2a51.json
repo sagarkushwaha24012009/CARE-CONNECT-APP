@@ -1,0 +1,259 @@
+{
+  "project": {
+    "name": "Care Connect",
+    "version": "1.0.0",
+    "platform": "Android-first",
+    "purpose": "A family-supported elder-care app connecting elders with their authorized caretakers.",
+    "status": "Implementation blueprint; generated reference images are visual guidance, not production UI or tested software."
+  },
+  "implementation_goal": "Build a complete, accessible Android application from scratch, using the supplied reference images and requirements. Implement real navigation, authentication, data persistence, notifications, caretaker-elder linking, SOS workflows, and offline-tolerant behavior. Do not create nonfunctional decorative buttons.",
+  "design_system": {
+    "style": "Neo-Brutalist, friendly, playful, elder-friendly",
+    "reference_image_policy": "Use the included PNGs as visual references. Keep one consistent design language across every screen.",
+    "aspect_ratio": "9:16 portrait reference composition; adapt responsively to actual Android device dimensions and safe areas.",
+    "visual_rules": [
+      "Thick, high-contrast black outlines around cards, controls, and major sections.",
+      "Black icons with clear silhouettes; do not use thin grey icons.",
+      "Rounded rectangular cards with bold pastel color blocks.",
+      "Use yellow, sky blue, mint green, soft pink, and lavender as accent surfaces; keep text high contrast.",
+      "Large readable typography, generous spacing, clear labels, and large touch targets suitable for older adults.",
+      "Use consistent icon family, border thickness, corner radii, spacing, and button heights throughout the app.",
+      "Support light mode and dark mode, plus a small set of user-selectable appearance themes without reducing contrast.",
+      "Do not copy accidental text errors or invented patient details from generated images."
+    ],
+    "accessibility": [
+      "Scalable text and Android font scaling support.",
+      "Touch targets preferably at least 48dp.",
+      "Content descriptions for icons and meaningful screen-reader order.",
+      "Do not communicate status by color alone; add text and/or icon labels.",
+      "Confirm high-impact actions such as SOS cancellation or medicine status changes."
+    ]
+  },
+  "user_roles": {
+    "elder": {
+      "permissions": [
+        "View own dashboard and care schedule.",
+        "View medicine reminders and mark a reminder as taken or skipped.",
+        "Record water intake and complete assigned tasks.",
+        "Initiate SOS and manage permitted location-sharing settings.",
+        "View linked caretaker details and notifications."
+      ]
+    },
+    "caretaker": {
+      "permissions": [
+        "Create and manage an elder profile after authorization.",
+        "View linked elders and their care status.",
+        "Create and edit medicine schedules and tasks.",
+        "Manage at least five emergency contacts per elder.",
+        "View permitted reminder and SOS status.",
+        "Manage appointments and notifications."
+      ]
+    }
+  },
+  "screens": [
+    {
+      "id": "splash_onboarding",
+      "name": "Splash and onboarding",
+      "requirements": [
+        "Care Connect logo",
+        "short purpose statement",
+        "clear onboarding steps",
+        "elder-friendly text"
+      ]
+    },
+    {
+      "id": "role_selection_auth",
+      "name": "Role selection and authentication",
+      "requirements": [
+        "Separate Elder and Caretaker entry paths",
+        "secure sign-in and sign-up",
+        "password reset",
+        "clear privacy explanation"
+      ]
+    },
+    {
+      "id": "elder_home",
+      "name": "Elder home dashboard",
+      "reference": "03_elder_home_dashboard_9x16.png",
+      "requirements": [
+        "Greeting",
+        "next medicine reminder",
+        "water tracker",
+        "tasks",
+        "emergency contacts",
+        "health tips",
+        "prominent SOS",
+        "location-sharing status",
+        "bottom navigation"
+      ]
+    },
+    {
+      "id": "caretaker_dashboard",
+      "name": "Caretaker dashboard",
+      "reference": "02_caretaker_dashboard_9x16.png",
+      "requirements": [
+        "Connected elders",
+        "medicine/water/task summaries",
+        "SOS alert area",
+        "quick actions",
+        "notifications",
+        "add elder"
+      ]
+    },
+    {
+      "id": "elder_details",
+      "name": "Elder details",
+      "requirements": [
+        "Elder profile",
+        "care overview",
+        "authorized caretaker information",
+        "recent activity"
+      ]
+    },
+    {
+      "id": "medicine_reminders",
+      "name": "Medicine reminders",
+      "requirements": [
+        "Today's schedule",
+        "add/edit medicine",
+        "medicine name",
+        "prescription-provided dosage",
+        "time",
+        "repeat schedule",
+        "taken/pending/skipped status",
+        "caretaker visibility"
+      ]
+    },
+    {
+      "id": "water_tracker",
+      "name": "Water tracker",
+      "requirements": [
+        "Daily goal configurable by user/caretaker",
+        "simple add-water action",
+        "progress display",
+        "no medical claims"
+      ]
+    },
+    {
+      "id": "tasks",
+      "name": "Tasks",
+      "requirements": [
+        "Assigned tasks",
+        "due time/date",
+        "completion status",
+        "caretaker task management"
+      ]
+    },
+    {
+      "id": "emergency_contacts",
+      "name": "Emergency contacts",
+      "requirements": [
+        "Support at least five contacts",
+        "name and phone number",
+        "relationship label",
+        "call action",
+        "authorized add/edit/remove"
+      ]
+    },
+    {
+      "id": "sos",
+      "name": "SOS emergency",
+      "requirements": [
+        "Large SOS activation control",
+        "clear confirmation/cancel flow",
+        "notify configured emergency contacts",
+        "share location only with permission",
+        "show delivery status where available"
+      ]
+    },
+    {
+      "id": "appointments",
+      "name": "Appointments",
+      "requirements": [
+        "Upcoming appointments",
+        "date/time/location",
+        "reminders",
+        "caretaker management"
+      ]
+    },
+    {
+      "id": "notifications",
+      "name": "Notifications",
+      "requirements": [
+        "Medicine reminders",
+        "task reminders",
+        "SOS updates",
+        "read/unread state"
+      ]
+    },
+    {
+      "id": "profile_settings",
+      "name": "Profile and settings",
+      "requirements": [
+        "Profile",
+        "light/dark mode",
+        "appearance options",
+        "text size",
+        "notification preferences",
+        "privacy and location controls",
+        "logout"
+      ]
+    }
+  ],
+  "core_functionality": {
+    "authentication": "Use Firebase Authentication or an equivalent maintained authentication provider. Never hardcode credentials or expose secrets in the client.",
+    "elder_caretaker_linking": "Use invitation or pairing-code flow with explicit consent and role-based authorization. A caretaker must only access elders linked to that caretaker.",
+    "database": "Use a secure cloud database with per-user access rules. Define users, elder_profiles, caretaker_links, medicines, medicine_logs, tasks, emergency_contacts, appointments, notifications, and sos_events.",
+    "notifications": "Schedule local Android notifications for reminders and use push notifications for cross-device updates. Handle Android notification permission and exact-alarm restrictions gracefully.",
+    "calling": "Use Android-supported dial intents for calls; show the number and let the user confirm. Do not silently place calls.",
+    "location": "Request location permission only when needed. Explain sharing, allow revocation, and avoid continuous tracking unless explicitly enabled and justified.",
+    "offline": "Cache essential read data and queue safe updates for later synchronization. Clearly show stale/offline state and resolve conflicts safely.",
+    "security": [
+      "Least-privilege access rules",
+      "input validation",
+      "secure token handling",
+      "no secrets in source control",
+      "audit sensitive SOS and profile changes"
+    ]
+  },
+  "medicine_safety": [
+    "The app must not diagnose, prescribe, or recommend medicine or dosage.",
+    "Medicine name and dosage must be entered from a prescription or by an authorized caretaker.",
+    "Show the schedule exactly as configured and allow corrections by an authorized user.",
+    "Provide taken, skipped, and pending states without implying that a reminder proves medicine was consumed."
+  ],
+  "technical_plan": {
+    "recommended_stack": "Native Android with Kotlin and Jetpack Compose; Firebase Authentication, Firestore, and Firebase Cloud Messaging where suitable.",
+    "architecture": "MVVM with repository layer, lifecycle-aware state, dependency injection, and clear separation of UI, domain, and data layers.",
+    "build_steps": [
+      "Create Android project, package structure, theme tokens, reusable components, and navigation.",
+      "Implement role selection, authentication, profile setup, and consent-based elder-caretaker linking.",
+      "Implement elder and caretaker dashboards using the reference design system.",
+      "Implement medicine, water, tasks, appointments, contacts, notifications, and SOS flows.",
+      "Add database models, access rules, local persistence, offline synchronization, and notification scheduling.",
+      "Add accessibility, dark mode, text scaling, and appearance preferences.",
+      "Write unit tests, UI tests, security-rule tests, and device tests.",
+      "Build debug and release APKs, document setup, and produce a reproducible release checklist."
+    ],
+    "deliverables": [
+      "Complete Android source project",
+      "All approved reference images",
+      "Design tokens and reusable UI components",
+      "Firebase setup instructions and security rules",
+      "JSON implementation plan",
+      "README with build/run instructions",
+      "Test checklist and known limitations"
+    ]
+  },
+  "acceptance_criteria": [
+    "Every visible control has a working, tested action or is clearly marked as unavailable.",
+    "Elder and caretaker permissions are enforced in both UI and backend rules.",
+    "At least five emergency contacts can be saved for an elder.",
+    "Medicine reminders support configured schedules and status tracking.",
+    "SOS flow requires appropriate confirmation and reports actual delivery state without false success claims.",
+    "The app remains understandable and usable with large text and screen readers.",
+    "Offline behavior and later synchronization are tested.",
+    "All screens consistently follow the supplied Neo-Brutalist visual references."
+  ],
+  "developer_instructions": "Implement from scratch. First inspect all included reference images and this JSON plan. Build the project in small testable phases. Do not invent credentials, Firebase project IDs, API keys, medical data, or user identities. Ask for required service configuration only when implementation reaches that step. Report completed and tested features separately from planned or mocked features."
+}
